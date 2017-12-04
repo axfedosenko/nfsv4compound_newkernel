@@ -1432,6 +1432,141 @@ out:
 	return err;
 }
 
+static int nfs_allocate_handles(struct nfs_fh ***fhandles, struct nfs_fattr ***fattrs, struct nfs4_label ***labels, struct inode *dir, int size){
+	int i = 0;
+	*fhandles = kmalloc(sizeof(struct nfs_fh*) * size, GFP_KERNEL);
+	*fattrs = kmalloc(sizeof(struct nfs_fattr*) * size, GFP_KERNEL);
+	*labels = kmalloc(sizeof(struct nfs4_label*) * size, GFP_KERNEL);
+
+	if(!*fattrs || !*fhandles || !*labels)
+		return -ENOMEM;
+
+	for(i = 0; i < size; i++){
+		(*fhandles)[i] = nfs_alloc_fhandle();
+		(*fattrs)[i] = nfs_alloc_fattr();
+		(*labels)[i] = nfs4_label_alloc(NFS_SERVER(dir), GFP_NOWAIT);
+		if (!(*fhandles)[i] || !(*fattrs)[i])
+			return -ENOMEM;
+	}
+	return 0;
+}
+
+static struct dentry * nfs_fill_dchain_list(struct nameidata *nd, struct nfs_fh **fhandles, 
+				struct nfs_fattr **fattrs, struct nfs4_label **labels, struct dentry *parent){
+	int i = 0;
+	struct list_head *cur_pos;
+	struct inode *inode = NULL;
+	struct dentry *dentry = NULL;
+	struct chain_dentry *dchain_entry;
+	struct dentry *res = NULL;
+	struct list_head *dchain_list = &nd->dchain_list;
+
+	list_for_each(cur_pos, dchain_list){
+		inode = NULL;
+		dchain_entry = list_entry(cur_pos, struct chain_dentry, list);
+		dentry = dchain_entry->dentry;
+
+		inode = nfs_fhget(parent->d_sb, fhandles[i], fattrs[i], labels[i]);
+		i++;
+
+		res = ERR_CAST(inode);
+
+		if (IS_ERR(res)){
+			res = d_materialise_unique(dentry, NULL);
+		}
+		else{
+			res = d_materialise_unique(dentry, inode);
+		}
+
+		if (res != NULL) {
+			if (IS_ERR(res)){
+				return res;
+			}
+			dchain_entry->dentry = res;
+		}
+		
+		if(d_is_symlink(dentry)){
+			res = ERR_PTR(10);
+			break;
+		}
+	}
+
+	nd->path.dentry = dentry;
+	if(!IS_ERR(ERR_CAST(inode)))
+		nd->inode = inode;
+	else
+		nd->inode = NULL;
+
+	return res;
+}
+
+static int nfs_free_handles(struct nfs_fh **fhandles, struct nfs_fattr **fattrs, struct nfs4_label **labels, int size) {
+	int i = 0;
+
+	for(i = 0; i < size; i++){
+		nfs_free_fhandle(fhandles[i]);
+		nfs_free_fattr(fattrs[i]);
+		nfs4_label_free(labels[i]);
+	}
+
+	kfree(fhandles);
+	kfree(fattrs);
+	kfree(labels);
+	return 0;
+}
+
+int nfs_chain_lookup_open(struct nameidata *nd, struct dentry *dentry,
+			   struct file * file, unsigned open_flag,
+			   umode_t create_mode, int *opened) {
+	int error = 0;
+
+	error = NFS_PROTO(nd->inode)->chain_lookup_open(NULL, NULL, NULL, NULL, NULL, 0);
+	return error;
+}	
+EXPORT_SYMBOL_GPL(nfs_chain_lookup_open);
+
+int nfs_chain_lookup(struct nameidata *nd) {
+
+	int error = 0;
+	struct nfs_fh **fhandles = NULL;
+	struct nfs_fattr **fattrs = NULL;
+	struct nfs4_label **labels = NULL;
+	struct dentry *parent = nd->path.dentry;
+	struct dentry *res;
+	struct inode* dir;
+	struct list_head *dchain_list = &nd->dchain_list;
+
+
+	dir = parent->d_inode;
+	
+	error = nfs_allocate_handles(&fhandles, &fattrs, &labels, dir, nd->chain_size);
+	
+	if(error < 0)
+		goto out;
+
+	nfs_block_sillyrename(parent);
+	
+	error = NFS_PROTO(dir)->chain_lookup(dir, dchain_list, fhandles, fattrs, labels, nd->chain_size);
+	if (error < 0 && error != -ENOENT && error != -EACCES && error != -40)
+		goto out_unblock_sillyrename;
+	
+	res = nfs_fill_dchain_list(nd, fhandles, fattrs, labels, parent);
+
+	if(PTR_ERR(res) == 10){
+		error = 10;
+	}
+out_unblock_sillyrename:
+	nfs_unblock_sillyrename(parent);
+out:
+//	mutex_unlock(&parent->d_inode->i_mutex);
+
+	dput(parent);
+	nfs_free_handles(fhandles, fattrs, labels, nd->chain_size);
+	
+	return error;
+}
+EXPORT_SYMBOL_GPL(nfs_chain_lookup);
+
 int nfs_atomic_open(struct inode *dir, struct dentry *dentry,
 		    struct file *file, unsigned open_flags,
 		    umode_t mode, int *opened)
@@ -2465,7 +2600,8 @@ static int nfs_open_permission_mask(int openflags)
 
 int nfs_may_open(struct inode *inode, struct rpc_cred *cred, int openflags)
 {
-	return nfs_do_access(inode, cred, nfs_open_permission_mask(openflags));
+	return 0; //CHECK
+	//return nfs_do_access(inode, cred, nfs_open_permission_mask(openflags));
 }
 EXPORT_SYMBOL_GPL(nfs_may_open);
 
@@ -2488,7 +2624,7 @@ int nfs_permission(struct inode *inode, int mask)
 {
 	struct rpc_cred *cred;
 	int res = 0;
-
+	return res; //CHECK
 	nfs_inc_stats(inode, NFSIOS_VFSACCESS);
 
 	if ((mask & (MAY_READ | MAY_WRITE | MAY_EXEC)) == 0)

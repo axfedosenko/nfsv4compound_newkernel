@@ -924,6 +924,38 @@ struct nfs3_getaclres {
 
 #if IS_ENABLED(CONFIG_NFS_V4)
 
+struct nfs4_chain_lookup_arg {
+	struct nfs4_sequence_args	seq_args;
+	const struct nfs_fh *		dir_fh;
+	const struct list_head *		dchain_list;
+	const u32 *			bitmask;
+};
+
+struct nfs4_chain_lookup_res {
+	struct nfs4_sequence_res	seq_res;
+	const struct nfs_server *	server;
+	struct nfs_fattr **		fattrs;
+	int size;
+	struct nfs_fh **		fhandles;
+	struct nfs4_label **	labels;
+};
+
+struct nfs4_chain_lookup_open_arg {
+	struct nfs4_sequence_args	seq_args;
+	const struct nfs_fh *		dir_fh;
+	const struct list_head *		dchain_list;
+	const u32 *			bitmask;
+};
+
+struct nfs4_chain_lookup_open_res {
+	struct nfs4_sequence_res	seq_res;
+	const struct nfs_server *	server;
+	struct nfs_fattr **		fattrs;
+	int size;
+	struct nfs_fh **		fhandles;
+	struct nfs4_label **	labels;
+};
+
 typedef u64 clientid4;
 
 struct nfs4_accessargs {
@@ -1585,6 +1617,12 @@ struct nfs_rpc_ops {
 			    struct nfs4_label *);
 	int	(*lookupp) (struct inode *, struct nfs_fh *,
 			    struct nfs_fattr *, struct nfs4_label *);
+	int	(*chain_lookup)  (struct inode *, struct list_head *,
+			    struct nfs_fh **, struct nfs_fattr **,
+			    struct nfs4_label **, int size);
+	int	(*chain_lookup_open)  (struct inode *, struct list_head *,
+			    struct nfs_fh **, struct nfs_fattr **,
+			    struct nfs4_label **, int size);
 	int	(*access)  (struct inode *, struct nfs_access_entry *);
 	int	(*readlink)(struct inode *, struct page *, unsigned int,
 			    unsigned int);

@@ -521,6 +521,9 @@ struct nameidata {
 	} *stack, internal[EMBEDDED_LEVELS];
 	struct filename	*name;
 	struct nameidata *saved;
+	struct list_head dchain_list;
+	unsigned int chain_size;
+	struct dentry *chain_parent;
 	struct inode	*link_inode;
 	unsigned	root_seq;
 	int		dfd;
@@ -2039,7 +2042,7 @@ static inline u64 hash_name(const void *salt, const char *name)
 }
 
 #endif
-
+static int chain_lookup(struct nameidata *nd, struct path *path);
 /*
  * Name resolution.
  * This is the basic name resolution function, turning a pathname into
@@ -2048,6 +2051,177 @@ static inline u64 hash_name(const void *salt, const char *name)
  * Returns 0 and nd will have valid dentry and mnt on success.
  * Returns error and drops reference to input namei data on failure.
  */
+static inline void dchain_list_pop(struct nameidata *nd){
+	struct chain_dentry *dchain_entry;	
+	struct list_head *pos = nd->dchain_list.prev;
+	dchain_entry = list_entry(pos, struct chain_dentry, list);
+	dput(dchain_entry->dentry);
+	list_del(pos);
+	kfree(dchain_entry);
+	nd->chain_size--;
+}
+
+static inline int walk_chain(struct nameidata *nd, struct path *path, int follow);
+
+static inline int free_dchain_list(struct nameidata *nd){
+	int i = 0;
+	struct list_head *pos, *q;
+	struct chain_dentry *dchain_entry;
+	struct list_head *dchain_list = &nd->dchain_list;
+	struct dentry *dentry, *prev = NULL;
+
+	list_for_each_safe(pos, q, dchain_list){
+		dchain_entry = list_entry(pos, struct chain_dentry, list);
+		dentry = dchain_entry->dentry;
+
+
+		i++;
+		// if(i < nd->chain_size){
+		if (dentry != nd->path.dentry){
+			dput(dentry);
+		}
+
+		if(d_is_symlink(dentry)){
+			if(prev != NULL)
+				dput(nd->path.dentry);
+			nd->last = dchain_entry->name;
+		}
+		list_del(pos);
+		kfree(dchain_entry);
+		prev = dentry;
+	}
+	nd->chain_size = 0;
+
+	return 0;
+}
+
+static int chain_lookup(struct nameidata *nd, struct path *path){
+	int err = nd->inode->i_op->chain_lookup(nd);
+	if(err > 0){
+		path->dentry = nd->path.dentry;
+		path->mnt = nd->path.mnt;
+		nd->path.dentry = path->dentry->d_parent;
+		nd->inode = nd->path.dentry->d_inode;
+		dget(nd->path.dentry);
+	}
+	free_dchain_list(nd);
+
+	if (err < 0){
+		terminate_walk(nd);
+	}
+	mutex_unlock(&nd->chain_parent->d_inode->i_mutex);
+	return err;
+}
+
+static inline int walk_chain(struct nameidata *nd, int follow)
+{
+	struct path path;
+	struct list_head *dchain_list = &nd->dchain_list;
+	struct dentry *dentry;
+	struct chain_dentry *new_chain;
+	
+	bool need_lookup;
+	int err = 0;
+
+	if(unlikely(nd->last_type != LAST_NORM)){
+		if(nd->chain_size > 0 && nd->last_type == LAST_DOTDOT){
+			dchain_list_pop(nd);
+			if(!nd->chain_size)
+				mutex_unlock(&nd->chain_parent->d_inode->i_mutex);
+			return 0;
+		}
+		else if(nd->chain_size > 0 && nd->last_type == LAST_DOT){
+			return 0;
+		}
+		else{
+			err = handle_dots(nd, nd->last_type);
+			return err;
+		}
+	}
+
+
+	/* all access rights will be permitted later
+	/  this version work without access rights
+	/  err = may_lookup(nd);
+		/  if (err)
+	/	break;	
+	*/
+
+	if(nd->chain_size)
+		dentry = list_entry(dchain_list->prev, struct chain_dentry, list)->dentry;
+	else {
+		nd->chain_parent = nd->path.dentry;
+		mutex_lock(&nd->chain_parent->d_inode->i_mutex);
+		dentry = nd->path.dentry;
+	}
+
+	dentry = lookup_dcache(&nd->last, dentry, nd->flags, &need_lookup);
+
+	if(IS_ERR(dentry)){
+		err = PTR_ERR(dentry);
+		goto out_err;
+	}
+
+	path->dentry = dentry;
+	path->mnt = nd->path.mnt;
+	
+	if(!need_lookup) {
+		// if(d_mountpoint(path->dentry)) {
+		// 	follow_mount(path);
+		// }
+		err = follow_managed(&path, nd);
+		if (unlikely(err < 0))
+			return err;
+
+		// if(should_follow_link(path->dentry, follow)){
+		// 	mutex_unlock(&nd->chain_parent->d_inode->i_mutex);
+
+		// 	return 1;
+		// }
+		if (unlikely(d_is_negative(path.dentry))) {
+			path_to_nameidata(&path, nd);
+			return -ENOENT;
+		}
+
+		inode = d_backing_inode(path.dentry)
+		//if(nd->chain_size)
+		free_dchain_list(nd);
+
+		mutex_unlock(&nd->chain_parent->d_inode->i_mutex);
+		// if(unlikely(!dentry->d_inode)) {//maybe d_is_negative(dentry)???
+		// 	terminate_walk(nd);
+		// 	return -ENOENT;
+		// }
+	} else {
+		new_chain = kmalloc(sizeof(struct chain_dentry), GFP_KERNEL);
+
+		if(!new_chain) {
+			err = -ENOMEM;
+			goto out_err;
+		}
+		d_set_type(dentry, DCACHE_CHAIN_TEMP);
+
+		new_chain->name = nd->last;
+		new_chain->dentry = dentry;
+		list_add_tail(&new_chain->list, dchain_list);
+		nd->chain_size++;
+
+		if(nd->chain_size >= 30){
+
+			return chain_lookup(nd, path);
+			return step_into(nd, &path, flags, nd->inode, seq);
+		}
+	}
+
+	return err;
+
+out_err:
+	terminate_walk(nd);
+	free_dchain_list(nd);
+
+	mutex_unlock(&nd->chain_parent->d_inode->i_mutex);
+	return err;
+}
 static int link_path_walk(const char *name, struct nameidata *nd)
 {
 	int err;
@@ -2119,7 +2293,13 @@ OK:
 			err = walk_component(nd, WALK_FOLLOW);
 		} else {
 			/* not the last component */
-			err = walk_component(nd, WALK_FOLLOW | WALK_MORE);
+			// err = walk_component(nd, WALK_FOLLOW | WALK_MORE);
+			if(likely(nd->inode) && nd->inode->i_op->chain_lookup && !(nd->flags & LOOKUP_AUTOMOUNT)){
+ 				err = walk_chain(nd, WALK_FOLLOW);
+	 		}
+	 		else{
+	 			err = walk_component(nd, WALK_FOLLOW);
+	 		}
 		}
 		if (err < 0)
 			return err;
@@ -2159,6 +2339,9 @@ static const char *path_init(struct nameidata *nd, unsigned flags)
 	nd->last_type = LAST_ROOT; /* if there are only slashes... */
 	nd->flags = flags | LOOKUP_JUMPED | LOOKUP_PARENT;
 	nd->depth = 0;
+	nd->chain_size = 0;
+	INIT_LIST_HEAD(&nd->dchain_list);
+
 	if (flags & LOOKUP_ROOT) {
 		struct dentry *root = nd->root.dentry;
 		struct inode *inode = root->d_inode;
@@ -2256,7 +2439,17 @@ static inline int lookup_last(struct nameidata *nd)
 {
 	if (nd->last_type == LAST_NORM && nd->last.name[nd->last.len])
 		nd->flags |= LOOKUP_FOLLOW | LOOKUP_DIRECTORY;
+	if (nd->path.dentry->d_inode && nd->path.dentry->d_inode->i_op->chain_lookup && !(nd->flags & LOOKUP_AUTOMOUNT)){
+		err = walk_chain(nd, 0);
+		if (err)
+			return err;
+		
+		if (!nd->chain_size)
+			return err;
 
+		err = chain_lookup(nd, nd->path);
+		return err;
+	}
 	nd->flags &= ~LOOKUP_PARENT;
 	return walk_component(nd, 0);
 }
