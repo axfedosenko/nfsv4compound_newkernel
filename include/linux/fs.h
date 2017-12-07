@@ -3056,6 +3056,11 @@ extern int __page_symlink(struct inode *inode, const char *symname, int len,
 		int nofs);
 extern int page_symlink(struct inode *inode, const char *symname, int len);
 extern const struct inode_operations page_symlink_inode_operations;
+struct chain_dentry {
+	struct dentry *dentry;
+	struct qstr name;
+	struct list_head list;
+};
 extern void kfree_link(void *);
 extern void generic_fillattr(struct inode *, struct kstat *);
 extern int vfs_getattr_nosec(const struct path *, struct kstat *, u32, unsigned int);

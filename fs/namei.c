@@ -2052,7 +2052,7 @@ static inline void dchain_list_pop(struct nameidata *nd){
 	nd->chain_size--;
 }
 
-static inline int walk_chain(struct nameidata *nd, struct path *path, int follow);
+static inline int walk_chain(struct nameidata *nd, int follow);
 
 static inline int free_dchain_list(struct nameidata *nd){
 	int i = 0;
@@ -2100,7 +2100,8 @@ static int chain_lookup(struct nameidata *nd, struct path *path){
 	if (err < 0){
 		terminate_walk(nd);
 	}
-	mutex_unlock(&nd->chain_parent->d_inode->i_mutex);
+	inode_unlock_shared(&nd->chain_parent->d_inode);
+	// mutex_unlock(&nd->chain_parent->d_inode->i_mutex);
 	return err;
 }
 
@@ -2110,7 +2111,7 @@ static inline int walk_chain(struct nameidata *nd, int follow)
 	struct list_head *dchain_list = &nd->dchain_list;
 	struct dentry *dentry;
 	struct chain_dentry *new_chain;
-	
+	unsigned seq = 0;
 	bool need_lookup;
 	int err = 0;
 
@@ -2118,7 +2119,8 @@ static inline int walk_chain(struct nameidata *nd, int follow)
 		if(nd->chain_size > 0 && nd->last_type == LAST_DOTDOT){
 			dchain_list_pop(nd);
 			if(!nd->chain_size)
-				mutex_unlock(&nd->chain_parent->d_inode->i_mutex);
+				inode_unlock_shared(&nd->chain_parent->d_inode);
+				// mutex_unlock(&nd->chain_parent->d_inode->i_mutex);
 			return 0;
 		}
 		else if(nd->chain_size > 0 && nd->last_type == LAST_DOT){
@@ -2142,19 +2144,23 @@ static inline int walk_chain(struct nameidata *nd, int follow)
 		dentry = list_entry(dchain_list->prev, struct chain_dentry, list)->dentry;
 	else {
 		nd->chain_parent = nd->path.dentry;
-		mutex_lock(&nd->chain_parent->d_inode->i_mutex);
+		inode_lock_shared(&nd->chain_parent->d_inode);
+		// mutex_lock(&nd->chain_parent->d_inode->i_mutex);
 		dentry = nd->path.dentry;
 	}
 
-	dentry = lookup_dcache(&nd->last, dentry, nd->flags, &need_lookup);
+	dentry = lookup_dcache(&nd->last, dentry, nd->flags);
+	if (dentry == NULL){
+		need_lookup = 1;
+	}
 
 	if(IS_ERR(dentry)){
 		err = PTR_ERR(dentry);
 		goto out_err;
 	}
 
-	path->dentry = dentry;
-	path->mnt = nd->path.mnt;
+	path.dentry = dentry;
+	path.mnt = nd->path.mnt;
 	
 	if(!need_lookup) {
 		// if(d_mountpoint(path->dentry)) {
@@ -2177,8 +2183,8 @@ static inline int walk_chain(struct nameidata *nd, int follow)
 		inode = d_backing_inode(path.dentry)
 		//if(nd->chain_size)
 		free_dchain_list(nd);
-
-		mutex_unlock(&nd->chain_parent->d_inode->i_mutex);
+		inode_unlock_shared(&nd->chain_parent->d_inode);
+		// mutex_unlock(&nd->chain_parent->d_inode->i_mutex);
 		// if(unlikely(!dentry->d_inode)) {//maybe d_is_negative(dentry)???
 		// 	terminate_walk(nd);
 		// 	return -ENOENT;
@@ -2199,8 +2205,9 @@ static inline int walk_chain(struct nameidata *nd, int follow)
 
 		if(nd->chain_size >= 30){
 
-			return chain_lookup(nd, path);
-			return step_into(nd, &path, flags, nd->inode, seq);
+			err = chain_lookup(nd, &path);
+			if(err != 0) return err;
+			return step_into(nd, &path, follow, nd->inode, seq);
 		}
 	}
 
@@ -2209,8 +2216,8 @@ static inline int walk_chain(struct nameidata *nd, int follow)
 out_err:
 	terminate_walk(nd);
 	free_dchain_list(nd);
-
-	mutex_unlock(&nd->chain_parent->d_inode->i_mutex);
+	inode_unlock_shared(&nd->chain_parent->d_inode);
+	// mutex_unlock(&nd->chain_parent->d_inode->i_mutex);
 	return err;
 }
 static int link_path_walk(const char *name, struct nameidata *nd)
@@ -2431,6 +2438,7 @@ static inline int lookup_last(struct nameidata *nd)
 	if (nd->last_type == LAST_NORM && nd->last.name[nd->last.len])
 		nd->flags |= LOOKUP_FOLLOW | LOOKUP_DIRECTORY;
 	if (nd->path.dentry->d_inode && nd->path.dentry->d_inode->i_op->chain_lookup && !(nd->flags & LOOKUP_AUTOMOUNT)){
+		int err = 0;
 		err = walk_chain(nd, 0);
 		if (err)
 			return err;
@@ -2438,7 +2446,7 @@ static inline int lookup_last(struct nameidata *nd)
 		if (!nd->chain_size)
 			return err;
 
-		err = chain_lookup(nd, nd->path);
+		err = chain_lookup(nd, &nd->path);
 		return err;
 	}
 	nd->flags &= ~LOOKUP_PARENT;
