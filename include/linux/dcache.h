@@ -211,6 +211,7 @@ struct dentry_operations {
 #define DCACHE_REGULAR_TYPE		0x00400000 /* Regular file type (or fallthru to such) */
 #define DCACHE_SPECIAL_TYPE		0x00500000 /* Other file type (or fallthru to such) */
 #define DCACHE_SYMLINK_TYPE		0x00600000 /* Symlink (or fallthru to such) */
+#define DCACHE_CHAIN_TEMP		0X08000000	
 
 #define DCACHE_MAY_FREE			0x00800000
 #define DCACHE_FALLTHRU			0x01000000 /* Fall through to lower layer */

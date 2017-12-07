@@ -2100,7 +2100,7 @@ static int chain_lookup(struct nameidata *nd, struct path *path){
 	if (err < 0){
 		terminate_walk(nd);
 	}
-	inode_unlock_shared(&nd->chain_parent->d_inode);
+	inode_unlock_shared(nd->chain_parent->d_inode);
 	// mutex_unlock(&nd->chain_parent->d_inode->i_mutex);
 	return err;
 }
@@ -2119,7 +2119,7 @@ static inline int walk_chain(struct nameidata *nd, int follow)
 		if(nd->chain_size > 0 && nd->last_type == LAST_DOTDOT){
 			dchain_list_pop(nd);
 			if(!nd->chain_size)
-				inode_unlock_shared(&nd->chain_parent->d_inode);
+				inode_unlock_shared(nd->chain_parent->d_inode);
 				// mutex_unlock(&nd->chain_parent->d_inode->i_mutex);
 			return 0;
 		}
@@ -2180,10 +2180,9 @@ static inline int walk_chain(struct nameidata *nd, int follow)
 			return -ENOENT;
 		}
 
-		inode = d_backing_inode(path.dentry)
 		//if(nd->chain_size)
 		free_dchain_list(nd);
-		inode_unlock_shared(&nd->chain_parent->d_inode);
+		inode_unlock_shared(nd->chain_parent->d_inode);
 		// mutex_unlock(&nd->chain_parent->d_inode->i_mutex);
 		// if(unlikely(!dentry->d_inode)) {//maybe d_is_negative(dentry)???
 		// 	terminate_walk(nd);
@@ -2216,7 +2215,7 @@ static inline int walk_chain(struct nameidata *nd, int follow)
 out_err:
 	terminate_walk(nd);
 	free_dchain_list(nd);
-	inode_unlock_shared(&nd->chain_parent->d_inode);
+	inode_unlock_shared(nd->chain_parent->d_inode);
 	// mutex_unlock(&nd->chain_parent->d_inode->i_mutex);
 	return err;
 }
