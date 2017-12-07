@@ -2144,7 +2144,7 @@ static inline int walk_chain(struct nameidata *nd, int follow)
 		dentry = list_entry(dchain_list->prev, struct chain_dentry, list)->dentry;
 	else {
 		nd->chain_parent = nd->path.dentry;
-		inode_lock_shared(&nd->chain_parent->d_inode);
+		inode_lock_shared(nd->chain_parent->d_inode);
 		// mutex_lock(&nd->chain_parent->d_inode->i_mutex);
 		dentry = nd->path.dentry;
 	}
@@ -2195,7 +2195,7 @@ static inline int walk_chain(struct nameidata *nd, int follow)
 			err = -ENOMEM;
 			goto out_err;
 		}
-		d_set_type(dentry, DCACHE_CHAIN_TEMP);
+		// d_set_type(dentry, DCACHE_CHAIN_TEMP);
 
 		new_chain->name = nd->last;
 		new_chain->dentry = dentry;
