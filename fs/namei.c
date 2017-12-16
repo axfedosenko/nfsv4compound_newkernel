@@ -2047,7 +2047,7 @@ static inline void dchain_list_pop(struct nameidata *nd){
 	dput(dchain_entry->dentry);
 	list_del(pos);
 	kfree(dchain_entry);
-	nd->chain_size--;
+	nd->chain.chain_size--;
 }
 
 static inline int walk_chain(struct nameidata *nd, int follow);
@@ -2079,7 +2079,7 @@ static inline int free_dchain_list(struct nameidata *nd){
 		kfree(dchain_entry);
 		prev = dentry;
 	}
-	nd->chain_size = 0;
+	nd->chain.chain_size = 0;
 
 	return 0;
 }
@@ -2118,7 +2118,7 @@ static inline int walk_chain(struct nameidata *nd, int follow)
 	if(unlikely(nd->last_type != LAST_NORM)){
 		if(nd->chain.chain_size > 0 && nd->last_type == LAST_DOTDOT){
 			dchain_list_pop(nd);
-			if(!nd->chain_size)
+			if(!nd->chain.chain_size)
 				inode_unlock_shared(nd->chain.chain_parent->d_inode);
 				// mutex_unlock(&nd->chain_parent->d_inode->i_mutex);
 			return 0;
@@ -2200,9 +2200,9 @@ static inline int walk_chain(struct nameidata *nd, int follow)
 		new_chain->name = nd->last;
 		new_chain->dentry = dentry;
 		list_add_tail(&new_chain->list, dchain_list);
-		nd->chain_size++;
+		nd->chain.chain_size++;
 
-		if(nd->chain_size >= 30){
+		if(nd->chain.chain_size >= 30){
 
 			err = chain_lookup(nd, &path);
 			if(err != 0) return err;
@@ -2442,7 +2442,7 @@ static inline int lookup_last(struct nameidata *nd)
 		if (err)
 			return err;
 		
-		if (!nd->chain_size)
+		if (!nd->chain.chain_size)
 			return err;
 
 		err = chain_lookup(nd, &nd->path);
