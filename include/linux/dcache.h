@@ -158,7 +158,7 @@ struct dchain_data {
 	struct dentry *chain_parent;
 	struct dentry *dentry;
 	struct inode *inode;
-}
+};
 /*
  * Locking rules for dentry_operations callbacks are to be found in
  * Documentation/filesystems/Locking. Keep it updated!
