@@ -521,9 +521,7 @@ struct nameidata {
 	} *stack, internal[EMBEDDED_LEVELS];
 	struct filename	*name;
 	struct nameidata *saved;
-	struct list_head dchain_list;
-	unsigned int chain_size;
-	struct dentry *chain_parent;
+	struct dchain_data chain;
 	struct inode	*link_inode;
 	unsigned	root_seq;
 	int		dfd;
@@ -2044,7 +2042,7 @@ static int chain_lookup(struct nameidata *nd, struct path *path);
  */
 static inline void dchain_list_pop(struct nameidata *nd){
 	struct chain_dentry *dchain_entry;	
-	struct list_head *pos = nd->dchain_list.prev;
+	struct list_head *pos = nd->chain.dchain_list.prev;
 	dchain_entry = list_entry(pos, struct chain_dentry, list);
 	dput(dchain_entry->dentry);
 	list_del(pos);
@@ -2058,7 +2056,7 @@ static inline int free_dchain_list(struct nameidata *nd){
 	int i = 0;
 	struct list_head *pos, *q;
 	struct chain_dentry *dchain_entry;
-	struct list_head *dchain_list = &nd->dchain_list;
+	struct list_head *dchain_list = &nd->chain.dchain_list;
 	struct dentry *dentry, *prev = NULL;
 
 	list_for_each_safe(pos, q, dchain_list){
@@ -2087,8 +2085,10 @@ static inline int free_dchain_list(struct nameidata *nd){
 }
 
 static int chain_lookup(struct nameidata *nd, struct path *path){
-	int err = nd->inode->i_op->chain_lookup(nd);
+	int err = nd->inode->i_op->chain_lookup(&nd->chain);
 	if(err > 0){
+		nd->path.dentry = nd->chain.dentry;
+		nd->inode = nd->chain.inode;
 		path->dentry = nd->path.dentry;
 		path->mnt = nd->path.mnt;
 		nd->path.dentry = path->dentry->d_parent;
@@ -2100,7 +2100,7 @@ static int chain_lookup(struct nameidata *nd, struct path *path){
 	if (err < 0){
 		terminate_walk(nd);
 	}
-	inode_unlock_shared(nd->chain_parent->d_inode);
+	inode_unlock_shared(nd->chain.chain_parent->d_inode);
 	// mutex_unlock(&nd->chain_parent->d_inode->i_mutex);
 	return err;
 }
@@ -2108,7 +2108,7 @@ static int chain_lookup(struct nameidata *nd, struct path *path){
 static inline int walk_chain(struct nameidata *nd, int follow)
 {
 	struct path path;
-	struct list_head *dchain_list = &nd->dchain_list;
+	struct list_head *dchain_list = &nd->chain.dchain_list;
 	struct dentry *dentry;
 	struct chain_dentry *new_chain;
 	unsigned seq = 0;
@@ -2116,14 +2116,14 @@ static inline int walk_chain(struct nameidata *nd, int follow)
 	int err = 0;
 
 	if(unlikely(nd->last_type != LAST_NORM)){
-		if(nd->chain_size > 0 && nd->last_type == LAST_DOTDOT){
+		if(nd->chain.chain_size > 0 && nd->last_type == LAST_DOTDOT){
 			dchain_list_pop(nd);
 			if(!nd->chain_size)
-				inode_unlock_shared(nd->chain_parent->d_inode);
+				inode_unlock_shared(nd->chain.chain_parent->d_inode);
 				// mutex_unlock(&nd->chain_parent->d_inode->i_mutex);
 			return 0;
 		}
-		else if(nd->chain_size > 0 && nd->last_type == LAST_DOT){
+		else if(nd->chain.chain_size > 0 && nd->last_type == LAST_DOT){
 			return 0;
 		}
 		else{
@@ -2140,11 +2140,11 @@ static inline int walk_chain(struct nameidata *nd, int follow)
 	/	break;	
 	*/
 
-	if(nd->chain_size)
+	if(nd->chain.chain_size)
 		dentry = list_entry(dchain_list->prev, struct chain_dentry, list)->dentry;
 	else {
-		nd->chain_parent = nd->path.dentry;
-		inode_lock_shared(nd->chain_parent->d_inode);
+		nd->chain.chain_parent = nd->path.dentry;
+		inode_lock_shared(nd->chain.chain_parent->d_inode);
 		// mutex_lock(&nd->chain_parent->d_inode->i_mutex);
 		dentry = nd->path.dentry;
 	}
@@ -2182,7 +2182,7 @@ static inline int walk_chain(struct nameidata *nd, int follow)
 
 		//if(nd->chain_size)
 		free_dchain_list(nd);
-		inode_unlock_shared(nd->chain_parent->d_inode);
+		inode_unlock_shared(nd->chain.chain_parent->d_inode);
 		// mutex_unlock(&nd->chain_parent->d_inode->i_mutex);
 		// if(unlikely(!dentry->d_inode)) {//maybe d_is_negative(dentry)???
 		// 	terminate_walk(nd);
@@ -2215,7 +2215,7 @@ static inline int walk_chain(struct nameidata *nd, int follow)
 out_err:
 	terminate_walk(nd);
 	free_dchain_list(nd);
-	inode_unlock_shared(nd->chain_parent->d_inode);
+	inode_unlock_shared(nd->chain.chain_parent->d_inode);
 	// mutex_unlock(&nd->chain_parent->d_inode->i_mutex);
 	return err;
 }
@@ -2336,8 +2336,8 @@ static const char *path_init(struct nameidata *nd, unsigned flags)
 	nd->last_type = LAST_ROOT; /* if there are only slashes... */
 	nd->flags = flags | LOOKUP_JUMPED | LOOKUP_PARENT;
 	nd->depth = 0;
-	nd->chain_size = 0;
-	INIT_LIST_HEAD(&nd->dchain_list);
+	nd->chain.chain_size = 0;
+	INIT_LIST_HEAD(&nd->chain.dchain_list);
 
 	if (flags & LOOKUP_ROOT) {
 		struct dentry *root = nd->root.dentry;

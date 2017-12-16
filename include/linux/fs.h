@@ -1756,8 +1756,8 @@ struct inode_operations {
 	int (*atomic_open)(struct inode *, struct dentry *,
 			   struct file *, unsigned open_flag,
 			   umode_t create_mode, int *opened);
-	int (*chain_lookup) (struct nameidata *);
-	int (*chain_lookup_open) (struct nameidata *, struct dentry *,
+	int (*chain_lookup) (struct dchain_data *);
+	int (*chain_lookup_open) (struct dchain_data *, struct dentry *,
 			   struct file *, unsigned open_flag,
 			   umode_t create_mode, int *opened);
 	int (*tmpfile) (struct inode *, struct dentry *, umode_t);

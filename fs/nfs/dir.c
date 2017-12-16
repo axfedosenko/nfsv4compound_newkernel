@@ -1451,7 +1451,7 @@ static int nfs_allocate_handles(struct nfs_fh ***fhandles, struct nfs_fattr ***f
 	return 0;
 }
 
-static struct dentry * nfs_fill_dchain_list(struct nameidata *nd, struct nfs_fh **fhandles, 
+static struct dentry * nfs_fill_dchain_list(struct dchain_data *chain, struct nfs_fh **fhandles, 
 				struct nfs_fattr **fattrs, struct nfs4_label **labels, struct dentry *parent){
 	int i = 0;
 	struct list_head *cur_pos;
@@ -1459,7 +1459,7 @@ static struct dentry * nfs_fill_dchain_list(struct nameidata *nd, struct nfs_fh 
 	struct dentry *dentry = NULL;
 	struct chain_dentry *dchain_entry;
 	struct dentry *res = NULL;
-	struct list_head *dchain_list = &nd->dchain_list;
+	struct list_head *dchain_list = &chain->dchain_list;
 
 	list_for_each(cur_pos, dchain_list){
 		inode = NULL;
@@ -1470,13 +1470,15 @@ static struct dentry * nfs_fill_dchain_list(struct nameidata *nd, struct nfs_fh 
 		i++;
 
 		res = ERR_CAST(inode);
-
 		if (IS_ERR(res)){
-			res = d_materialise_unique(dentry, NULL);
+			dentry->d_inode = NULL;	
+			// res = d_materialise_unique(dentry, NULL);
 		}
 		else{
-			res = d_materialise_unique(dentry, inode);
+			dentry->d_inode = inode;
+			// res = d_materialise_unique(dentry, inode);
 		}
+		res = dentry;
 
 		if (res != NULL) {
 			if (IS_ERR(res)){
@@ -1491,11 +1493,12 @@ static struct dentry * nfs_fill_dchain_list(struct nameidata *nd, struct nfs_fh 
 		}
 	}
 
-	nd->path.dentry = dentry;
+	chain->dentry = dentry;
+
 	if(!IS_ERR(ERR_CAST(inode)))
-		nd->inode = inode;
+		chain->inode = inode;
 	else
-		nd->inode = NULL;
+		chain->inode = NULL;
 
 	return res;
 }
@@ -1515,53 +1518,53 @@ static int nfs_free_handles(struct nfs_fh **fhandles, struct nfs_fattr **fattrs,
 	return 0;
 }
 
-int nfs_chain_lookup_open(struct nameidata *nd, struct dentry *dentry,
+int nfs_chain_lookup_open(struct dchain_data chain, struct dentry *dentry,
 			   struct file * file, unsigned open_flag,
 			   umode_t create_mode, int *opened) {
 	int error = 0;
 
-	error = NFS_PROTO(nd->inode)->chain_lookup_open(NULL, NULL, NULL, NULL, NULL, 0);
+	error = NFS_PROTO(chain->parent->d_inode)->chain_lookup_open(NULL, NULL, NULL, NULL, NULL, 0);
 	return error;
 }	
 EXPORT_SYMBOL_GPL(nfs_chain_lookup_open);
 
-int nfs_chain_lookup(struct nameidata *nd) {
+int nfs_chain_lookup(struct dchain_data *chain) {
 
 	int error = 0;
 	struct nfs_fh **fhandles = NULL;
 	struct nfs_fattr **fattrs = NULL;
 	struct nfs4_label **labels = NULL;
-	struct dentry *parent = nd->path.dentry;
+	struct dentry *parent = chain->parent;
 	struct dentry *res;
 	struct inode* dir;
-	struct list_head *dchain_list = &nd->dchain_list;
+	struct list_head *dchain_list = &chain->dchain_list;
 
 
 	dir = parent->d_inode;
 	
-	error = nfs_allocate_handles(&fhandles, &fattrs, &labels, dir, nd->chain_size);
+	error = nfs_allocate_handles(&fhandles, &fattrs, &labels, dir, chain->chain_size);
 	
 	if(error < 0)
 		goto out;
 
-	nfs_block_sillyrename(parent);
+	// nfs_block_sillyrename(parent);
 	
-	error = NFS_PROTO(dir)->chain_lookup(dir, dchain_list, fhandles, fattrs, labels, nd->chain_size);
+	error = NFS_PROTO(dir)->chain_lookup(dir, dchain_list, fhandles, fattrs, labels, chain->chain_size);
 	if (error < 0 && error != -ENOENT && error != -EACCES && error != -40)
 		goto out_unblock_sillyrename;
 	
-	res = nfs_fill_dchain_list(nd, fhandles, fattrs, labels, parent);
+	res = nfs_fill_dchain_list(chain, fhandles, fattrs, labels, parent);
 
 	if(PTR_ERR(res) == 10){
 		error = 10;
 	}
 out_unblock_sillyrename:
-	nfs_unblock_sillyrename(parent);
+	// nfs_unblock_sillyrename(parent);
 out:
 //	mutex_unlock(&parent->d_inode->i_mutex);
 
 	dput(parent);
-	nfs_free_handles(fhandles, fattrs, labels, nd->chain_size);
+	nfs_free_handles(fhandles, fattrs, labels, chain->chain_size);
 	
 	return error;
 }

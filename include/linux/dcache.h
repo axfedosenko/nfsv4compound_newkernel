@@ -151,6 +151,14 @@ struct dentry_operations {
 				 unsigned int, unsigned int);
 } ____cacheline_aligned;
 
+
+struct dchain_data {
+	struct list_head dchain_list;
+	unsigned int chain_size;
+	struct dentry *chain_parent;
+	struct dentry *dentry;
+	struct inode *inode;
+}
 /*
  * Locking rules for dentry_operations callbacks are to be found in
  * Documentation/filesystems/Locking. Keep it updated!
