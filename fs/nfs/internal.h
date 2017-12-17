@@ -349,8 +349,8 @@ extern struct nfs_client *nfs_init_client(struct nfs_client *clp,
 			   const struct nfs_client_initdata *);
 
 /* dir.c */
-int nfs_chain_lookup(struct nameidata *);
-int nfs_chain_lookup_open(struct nameidata *, struct dentry *,
+int nfs_chain_lookup(struct dchain_data *);
+int nfs_chain_lookup_open(struct dchain_data *, struct dentry *,
 			   struct file *, unsigned,
 			   umode_t, int *);
 extern void nfs_advise_use_readdirplus(struct inode *dir);

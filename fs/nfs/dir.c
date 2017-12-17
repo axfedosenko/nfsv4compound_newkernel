@@ -1518,12 +1518,12 @@ static int nfs_free_handles(struct nfs_fh **fhandles, struct nfs_fattr **fattrs,
 	return 0;
 }
 
-int nfs_chain_lookup_open(struct dchain_data chain, struct dentry *dentry,
+int nfs_chain_lookup_open(struct dchain_data *chain, struct dentry *dentry,
 			   struct file * file, unsigned open_flag,
 			   umode_t create_mode, int *opened) {
 	int error = 0;
 
-	error = NFS_PROTO(chain->parent->d_inode)->chain_lookup_open(NULL, NULL, NULL, NULL, NULL, 0);
+	error = NFS_PROTO(chain->chain_parent->d_inode)->chain_lookup_open(NULL, NULL, NULL, NULL, NULL, 0);
 	return error;
 }	
 EXPORT_SYMBOL_GPL(nfs_chain_lookup_open);
@@ -1534,7 +1534,7 @@ int nfs_chain_lookup(struct dchain_data *chain) {
 	struct nfs_fh **fhandles = NULL;
 	struct nfs_fattr **fattrs = NULL;
 	struct nfs4_label **labels = NULL;
-	struct dentry *parent = chain->parent;
+	struct dentry *parent = chain->chain_parent;
 	struct dentry *res;
 	struct inode* dir;
 	struct list_head *dchain_list = &chain->dchain_list;
