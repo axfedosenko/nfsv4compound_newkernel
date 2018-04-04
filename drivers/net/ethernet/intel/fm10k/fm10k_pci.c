@@ -1,5 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0
 /* Intel(R) Ethernet Switch Host Interface Driver
- * Copyright(c) 2013 - 2017 Intel Corporation.
+ * Copyright(c) 2013 - 2018 Intel Corporation.
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -29,7 +30,7 @@ static const struct fm10k_info *fm10k_info_tbl[] = {
 	[fm10k_device_vf] = &fm10k_vf_info,
 };
 
-/**
+/*
  * fm10k_pci_tbl - PCI Device ID Table
  *
  * Wildcard entries (PCI_ANY_ID) should come last
@@ -211,7 +212,7 @@ static void fm10k_start_service_event(struct fm10k_intfc *interface)
 
 /**
  * fm10k_service_timer - Timer Call-back
- * @data: pointer to interface cast into an unsigned long
+ * @t: pointer to timer data
  **/
 static void fm10k_service_timer(struct timer_list *t)
 {
@@ -649,7 +650,7 @@ void fm10k_update_stats(struct fm10k_intfc *interface)
 
 /**
  * fm10k_watchdog_flush_tx - flush queues on host not ready
- * @interface - pointer to the device interface structure
+ * @interface: pointer to the device interface structure
  **/
 static void fm10k_watchdog_flush_tx(struct fm10k_intfc *interface)
 {
@@ -679,7 +680,7 @@ static void fm10k_watchdog_flush_tx(struct fm10k_intfc *interface)
 
 /**
  * fm10k_watchdog_subtask - check and bring link up
- * @interface - pointer to the device interface structure
+ * @interface: pointer to the device interface structure
  **/
 static void fm10k_watchdog_subtask(struct fm10k_intfc *interface)
 {
@@ -703,7 +704,7 @@ static void fm10k_watchdog_subtask(struct fm10k_intfc *interface)
 
 /**
  * fm10k_check_hang_subtask - check for hung queues and dropped interrupts
- * @interface - pointer to the device interface structure
+ * @interface: pointer to the device interface structure
  *
  * This function serves two purposes.  First it strobes the interrupt lines
  * in order to make certain interrupts are occurring.  Secondly it sets the
@@ -1995,6 +1996,7 @@ skip_tx_dma_drain:
 /**
  * fm10k_sw_init - Initialize general software structures
  * @interface: host interface private structure to initialize
+ * @ent: PCI device ID entry
  *
  * fm10k_sw_init initializes the interface private data structure.
  * Fields are initialized based on PCI device information and
@@ -2463,7 +2465,6 @@ static int fm10k_handle_resume(struct fm10k_intfc *interface)
 	return err;
 }
 
-#ifdef CONFIG_PM
 /**
  * fm10k_resume - Generic PM resume hook
  * @dev: generic device structure
@@ -2472,7 +2473,7 @@ static int fm10k_handle_resume(struct fm10k_intfc *interface)
  * suspend or hibernation. This function does not need to handle lower PCIe
  * device state as the stack takes care of that for us.
  **/
-static int fm10k_resume(struct device *dev)
+static int __maybe_unused fm10k_resume(struct device *dev)
 {
 	struct fm10k_intfc *interface = pci_get_drvdata(to_pci_dev(dev));
 	struct net_device *netdev = interface->netdev;
@@ -2499,7 +2500,7 @@ static int fm10k_resume(struct device *dev)
  * system suspend or hibernation. This function does not need to handle lower
  * PCIe device state as the stack takes care of that for us.
  **/
-static int fm10k_suspend(struct device *dev)
+static int __maybe_unused fm10k_suspend(struct device *dev)
 {
 	struct fm10k_intfc *interface = pci_get_drvdata(to_pci_dev(dev));
 	struct net_device *netdev = interface->netdev;
@@ -2510,8 +2511,6 @@ static int fm10k_suspend(struct device *dev)
 
 	return 0;
 }
-
-#endif /* CONFIG_PM */
 
 /**
  * fm10k_io_error_detected - called when PCI error is detected
@@ -2643,11 +2642,9 @@ static struct pci_driver fm10k_driver = {
 	.id_table		= fm10k_pci_tbl,
 	.probe			= fm10k_probe,
 	.remove			= fm10k_remove,
-#ifdef CONFIG_PM
 	.driver = {
 		.pm		= &fm10k_pm_ops,
 	},
-#endif /* CONFIG_PM */
 	.sriov_configure	= fm10k_iov_configure,
 	.err_handler		= &fm10k_err_handler
 };

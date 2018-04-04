@@ -241,9 +241,12 @@ static enum sctp_xmit sctp_packet_bundle_auth(struct sctp_packet *pkt,
 	if (!chunk->auth)
 		return retval;
 
-	auth = sctp_make_auth(asoc);
+	auth = sctp_make_auth(asoc, chunk->shkey->key_id);
 	if (!auth)
 		return retval;
+
+	auth->shkey = chunk->shkey;
+	sctp_auth_shkey_hold(auth->shkey);
 
 	retval = __sctp_packet_append_chunk(pkt, auth);
 
@@ -313,6 +316,7 @@ static enum sctp_xmit __sctp_packet_append_chunk(struct sctp_packet *packet,
 	/* We believe that this chunk is OK to add to the packet */
 	switch (chunk->chunk_hdr->type) {
 	case SCTP_CID_DATA:
+	case SCTP_CID_I_DATA:
 		/* Account for the data being in the packet */
 		sctp_packet_append_data(packet, chunk);
 		/* Disallow SACK bundling after DATA. */
@@ -489,7 +493,8 @@ merge:
 		}
 
 		if (auth) {
-			sctp_auth_calculate_hmac(tp->asoc, nskb, auth, gfp);
+			sctp_auth_calculate_hmac(tp->asoc, nskb, auth,
+						 packet->auth->shkey, gfp);
 			/* free auth if no more chunks, or add it back */
 			if (list_empty(&packet->chunk_list))
 				sctp_chunk_free(packet->auth);
@@ -724,7 +729,7 @@ static enum sctp_xmit sctp_packet_can_append_data(struct sctp_packet *packet,
 	 * or delay in hopes of bundling a full sized packet.
 	 */
 	if (chunk->skb->len + q->out_qlen > transport->pathmtu -
-		packet->overhead - sizeof(struct sctp_data_chunk) - 4)
+	    packet->overhead - sctp_datachk_len(&chunk->asoc->stream) - 4)
 		/* Enough data queued to fill a packet */
 		return SCTP_XMIT_OK;
 
@@ -759,7 +764,7 @@ static void sctp_packet_append_data(struct sctp_packet *packet,
 
 	asoc->peer.rwnd = rwnd;
 	sctp_chunk_assign_tsn(chunk);
-	sctp_chunk_assign_ssn(chunk);
+	asoc->stream.si->assign_number(chunk);
 }
 
 static enum sctp_xmit sctp_packet_will_fit(struct sctp_packet *packet,
@@ -768,6 +773,16 @@ static enum sctp_xmit sctp_packet_will_fit(struct sctp_packet *packet,
 {
 	enum sctp_xmit retval = SCTP_XMIT_OK;
 	size_t psize, pmtu, maxsize;
+
+	/* Don't bundle in this packet if this chunk's auth key doesn't
+	 * match other chunks already enqueued on this packet. Also,
+	 * don't bundle the chunk with auth key if other chunks in this
+	 * packet don't have auth key.
+	 */
+	if ((packet->auth && chunk->shkey != packet->auth->shkey) ||
+	    (!packet->auth && chunk->shkey &&
+	     chunk->chunk_hdr->type != SCTP_CID_AUTH))
+		return SCTP_XMIT_PMTU_FULL;
 
 	psize = packet->size;
 	if (packet->transport->asoc)

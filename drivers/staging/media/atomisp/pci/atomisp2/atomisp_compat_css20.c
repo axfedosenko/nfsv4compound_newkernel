@@ -4051,7 +4051,7 @@ int atomisp_css_get_formats_config(struct atomisp_sub_device *asd,
 int atomisp_css_get_zoom_factor(struct atomisp_sub_device *asd,
 					unsigned int *zoom)
 {
-	struct ia_css_dz_config dz_config;  /**< Digital Zoom */
+	struct ia_css_dz_config dz_config;  /** Digital Zoom */
 	struct ia_css_isp_config isp_config;
 	struct atomisp_device *isp = asd->isp;
 
@@ -4502,7 +4502,7 @@ int atomisp_css_isr_thread(struct atomisp_device *isp,
 {
 	enum atomisp_input_stream_id stream_id = 0;
 	struct atomisp_css_event current_event;
-	struct atomisp_sub_device *asd = &isp->asd[0];
+	struct atomisp_sub_device *asd;
 #ifndef ISP2401
 	bool reset_wdt_timer[MAX_STREAM_NUM] = {false};
 #endif

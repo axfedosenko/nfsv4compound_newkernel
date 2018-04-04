@@ -405,30 +405,12 @@ static int tick_nohz_cpu_down(unsigned int cpu)
 	return 0;
 }
 
-static int tick_nohz_init_all(void)
-{
-	int err = -1;
-
-#ifdef CONFIG_NO_HZ_FULL_ALL
-	if (!alloc_cpumask_var(&tick_nohz_full_mask, GFP_KERNEL)) {
-		WARN(1, "NO_HZ: Can't allocate full dynticks cpumask\n");
-		return err;
-	}
-	err = 0;
-	cpumask_setall(tick_nohz_full_mask);
-	tick_nohz_full_running = true;
-#endif
-	return err;
-}
-
 void __init tick_nohz_init(void)
 {
 	int cpu, ret;
 
-	if (!tick_nohz_full_running) {
-		if (tick_nohz_init_all() < 0)
-			return;
-	}
+	if (!tick_nohz_full_running)
+		return;
 
 	/*
 	 * Full dynticks uses irq work to drive the tick rescheduling on safe
@@ -481,9 +463,16 @@ static int __init setup_tick_nohz(char *str)
 
 __setup("nohz=", setup_tick_nohz);
 
-int tick_nohz_tick_stopped(void)
+bool tick_nohz_tick_stopped(void)
 {
 	return __this_cpu_read(tick_cpu_sched.tick_stopped);
+}
+
+bool tick_nohz_tick_stopped_cpu(int cpu)
+{
+	struct tick_sched *ts = per_cpu_ptr(&tick_cpu_sched, cpu);
+
+	return ts->tick_stopped;
 }
 
 /**
@@ -650,6 +639,11 @@ static void tick_nohz_restart(struct tick_sched *ts, ktime_t now)
 	ts->next_tick = 0;
 }
 
+static inline bool local_timer_softirq_pending(void)
+{
+	return local_softirq_pending() & TIMER_SOFTIRQ;
+}
+
 static ktime_t tick_nohz_stop_sched_tick(struct tick_sched *ts,
 					 ktime_t now, int cpu)
 {
@@ -666,8 +660,18 @@ static ktime_t tick_nohz_stop_sched_tick(struct tick_sched *ts,
 	} while (read_seqretry(&jiffies_lock, seq));
 	ts->last_jiffies = basejiff;
 
-	if (rcu_needs_cpu(basemono, &next_rcu) ||
-	    arch_needs_cpu() || irq_work_needs_cpu()) {
+	/*
+	 * Keep the periodic tick, when RCU, architecture or irq_work
+	 * requests it.
+	 * Aside of that check whether the local timer softirq is
+	 * pending. If so its a bad idea to call get_next_timer_interrupt()
+	 * because there is an already expired timer, so it will request
+	 * immeditate expiry, which rearms the hardware timer with a
+	 * minimal delta which brings us back to this place
+	 * immediately. Lather, rinse and repeat...
+	 */
+	if (rcu_needs_cpu(basemono, &next_rcu) || arch_needs_cpu() ||
+	    irq_work_needs_cpu() || local_timer_softirq_pending()) {
 		next_tick = basemono + TICK_NSEC;
 	} else {
 		/*
@@ -725,12 +729,6 @@ static ktime_t tick_nohz_stop_sched_tick(struct tick_sched *ts,
 	} else if (!ts->do_timer_last) {
 		delta = KTIME_MAX;
 	}
-
-#ifdef CONFIG_NO_HZ_FULL
-	/* Limit the tick delta to the maximum scheduler deferment */
-	if (!ts->inidle)
-		delta = min(delta, scheduler_tick_max_deferment());
-#endif
 
 	/* Calculate the next expiry time */
 	if (delta < (KTIME_MAX - basemono))
@@ -938,13 +936,6 @@ void tick_nohz_idle_enter(void)
 	struct tick_sched *ts;
 
 	lockdep_assert_irqs_enabled();
-	/*
-	 * Update the idle state in the scheduler domain hierarchy
-	 * when tick_nohz_stop_sched_tick() is called from the idle loop.
-	 * State will be updated to busy during the first busy tick after
-	 * exiting idle.
-	 */
-	set_cpu_sd_state_idle();
 
 	local_irq_disable();
 
@@ -983,6 +974,19 @@ ktime_t tick_nohz_get_sleep_length(void)
 	struct tick_sched *ts = this_cpu_ptr(&tick_cpu_sched);
 
 	return ts->sleep_length;
+}
+
+/**
+ * tick_nohz_get_idle_calls_cpu - return the current idle calls counter value
+ * for a particular CPU.
+ *
+ * Called from the schedutil frequency scaling governor in scheduler context.
+ */
+unsigned long tick_nohz_get_idle_calls_cpu(int cpu)
+{
+	struct tick_sched *ts = tick_get_tick_sched(cpu);
+
+	return ts->idle_calls;
 }
 
 /**
@@ -1079,7 +1083,7 @@ static inline void tick_nohz_activate(struct tick_sched *ts, int mode)
 	ts->nohz_mode = mode;
 	/* One update is enough */
 	if (!test_and_set_bit(0, &tick_nohz_active))
-		timers_update_migration(true);
+		timers_update_nohz();
 }
 
 /**
