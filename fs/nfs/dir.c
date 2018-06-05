@@ -1072,7 +1072,7 @@ static int nfs_lookup_revalidate(struct dentry *dentry, unsigned int flags)
 	struct nfs_fattr *fattr = NULL;
 	struct nfs4_label *label = NULL;
 	int error;
-
+	printk(KERN_ALERT, "dentry %s Lockref count %d\n", dentry->d_name.name, dentry->d_lockref.count);
 	if (flags & LOOKUP_RCU) {
 		parent = READ_ONCE(dentry->d_parent);
 		dir = d_inode_rcu(parent);
@@ -1468,26 +1468,38 @@ static struct dentry * nfs_fill_dchain_list(struct dchain_data *chain, struct nf
 
 		inode = nfs_fhget(parent->d_sb, fhandles[i], fattrs[i], labels[i]);
 		i++;
-
+		printk(KERN_ALERT "Inode %ld %d %ld\n", inode->i_ino, inode->i_mode, inode->i_ctime.tv_nsec);
 		res = ERR_CAST(inode);
-		if (IS_ERR(res)){
-			dentry->d_inode = NULL;	
-			// res = d_materialise_unique(dentry, NULL);
-		}
-		else{
-			dentry->d_inode = inode;
-			// res = d_materialise_unique(dentry, inode);
-		}
-		res = dentry;
+		if (IS_ERR(res))
+			dentry->d_inode = NULL;
 
-		if (res != NULL) {
-			if (IS_ERR(res)){
-				return res;
-			}
-			dchain_entry->dentry = res;
-		}
+		d_add(dentry, inode);
+		dentry->d_inode = inode;
+		// if (res != NULL) {
+		// 	if (IS_ERR(res))
+		// 		return res;
+		// 	dentry = res;
+		// }
+		
+
+		/* Notify readdir to use READDIRPLUS */
+
+		
+		// d_lookup_done(dentry);
+		// if (unlikely(old)) {
+		// 	dput(dentry);
+		// 	dentry = old;
+		// }
+		printk(KERN_ALERT "return inode %lu fill %s\n", inode->i_ino, dentry->d_name.name);
+		// if (res != NULL) {
+		// 	if (IS_ERR(res)){
+		// 		return res;
+		// 	}
+		// 	dchain_entry->dentry = res;
+		// }
 		
 		if(d_is_symlink(dentry)){
+			printk(KERN_ALERT "Found symlink %s\n", dentry->d_name.name);
 			res = ERR_PTR(10);
 			break;
 		}
@@ -1554,6 +1566,7 @@ int nfs_chain_lookup(struct dchain_data *chain) {
 		goto out_unblock_sillyrename;
 	
 	res = nfs_fill_dchain_list(chain, fhandles, fattrs, labels, parent);
+	nfs_force_use_readdirplus(dir);
 
 	if(PTR_ERR(res) == 10){
 		error = 10;

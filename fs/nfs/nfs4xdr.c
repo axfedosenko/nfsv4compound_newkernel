@@ -625,13 +625,13 @@ static int nfs4_stat_to_errno(int);
 				encode_putfh_maxsz + \
 				encode_lookup_maxsz + \
 				encode_getattr_maxsz + \
-				encode_getfh_maxsz)
+				encode_getfh_maxsz)*30
 #define NFS4_dec_chain_lookup_sz	(compound_decode_hdr_maxsz + \
 				decode_sequence_maxsz + \
 				decode_putfh_maxsz + \
 				decode_lookup_maxsz + \
 				decode_getattr_maxsz + \
-				decode_getfh_maxsz)
+				decode_getfh_maxsz)*30
 #define NFS4_enc_chain_lookup_open_sz	(compound_encode_hdr_maxsz + \
 				encode_sequence_maxsz + \
 				encode_putfh_maxsz + \
@@ -2201,6 +2201,9 @@ static void nfs4_xdr_enc_chain_lookup(struct rpc_rqst *req, struct xdr_stream *x
 	encode_putfh(xdr, args->dir_fh, &hdr);
 	list_for_each(cur_pos, args->dchain_list){
 		cur_dentry = list_entry(cur_pos, struct chain_dentry, list);
+		printk(KERN_ALERT "dchain %p, name %s\n", cur_dentry->dentry->d_name);
+		// printk(KERN_ALERT "dentry %p", cur_dentry->dentry);
+		// printk(KERN_ALERT "dname %s", cur_dentry->dentry->d_name);
 		encode_lookup(xdr, &cur_dentry->dentry->d_name, &hdr);
 		encode_getfh(xdr, &hdr);
 		encode_getfattr(xdr, args->bitmask, &hdr);
