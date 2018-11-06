@@ -2201,7 +2201,7 @@ static void nfs4_xdr_enc_chain_lookup(struct rpc_rqst *req, struct xdr_stream *x
 	encode_putfh(xdr, args->dir_fh, &hdr);
 	list_for_each(cur_pos, args->dchain_list){
 		cur_dentry = list_entry(cur_pos, struct chain_dentry, list);
-		printk(KERN_ALERT "dchain %p, name %s\n", cur_dentry->dentry->d_name);
+		// printk(KERN_ALERT "dchain %p, name %s\n", cur_dentry->dentry->d_name);
 		// printk(KERN_ALERT "dentry %p", cur_dentry->dentry);
 		// printk(KERN_ALERT "dname %s", cur_dentry->dentry->d_name);
 		encode_lookup(xdr, &cur_dentry->dentry->d_name, &hdr);

@@ -2045,6 +2045,7 @@ static inline int free_dchain_list(struct nameidata *nd){
 
 		i++;
 		// if(i < nd->chain_size){
+		// d_lookup_done(dentry);
 		if (dentry != nd->path.dentry){
 			dput(dentry);
 		}
@@ -2065,14 +2066,12 @@ static inline int free_dchain_list(struct nameidata *nd){
 
 static int chain_lookup(struct nameidata *nd, struct path *path){
 	int err = nd->inode->i_op->chain_lookup(&nd->chain);
-	printk(KERN_ALERT "Chain lookup %d, nd_dentry %s, nd_dentry_inonde %ld, nd_inode %ld\n", err, nd->chain.dentry->d_name.name, nd->chain.dentry->d_inode->i_ino, nd->chain.inode->i_ino);
-	dump_stack();
-	nd->path.dentry = nd->chain.dentry;
-	nd->inode = nd->chain.inode;
-	path->dentry = nd->path.dentry;
+	// printk(KERN_ALERT "Chain lookup %d, nd_dentry %s, nd_dentry_inonde %ld, nd_inode %ld\n", err, nd->chain.dentry->d_name.name, nd->chain.dentry->d_inode->i_ino, nd->chain.inode->i_ino);
+	// nd->path.dentry = nd->chain.dentry;
+	// nd->inode = nd->chain.inode;
+	path->dentry = nd->chain.dentry;
 	path->mnt = nd->path.mnt;
 	if(err > 0){
-		
 		// dget(nd->path.dentry);
 	}
 	free_dchain_list(nd);
@@ -2083,13 +2082,14 @@ static int chain_lookup(struct nameidata *nd, struct path *path){
 		return err;
 	}
 	else if (err > 0){
-		nd->path.dentry = path->dentry->d_parent;
-		nd->inode = nd->path.dentry->d_inode;
-		return step_into(nd, path, WALK_FOLLOW & WALK_MORE, nd->inode, 0);
+		printk(KERN_ALERT "Symlink nd %s, path %s\n", nd->path.dentry->d_name.name, path->dentry->d_name.name);
+		printk(KERN_ALERT "Symlink nd inode %ld, nd path inode %ld\n", nd->inode->i_ino, nd->path.dentry->d_inode->i_ino);
+		// nd->path.dentry = path->dentry->d_parent;
+		// nd->inode = nd->path.dentry->d_inode;
+		return step_into(nd, path, WALK_FOLLOW & WALK_MORE, nd->chain.inode, 0);
 	}
-	// mutex_unlock(&nd->chain_parent->d_inode->i_mutex);
 	inode_unlock_shared(nd->chain.chain_parent->d_inode);
-	return step_into(nd, path, 0, nd->inode, 0);
+	return step_into(nd, path, 0, nd->chain.inode, 0);
 }
 
 static inline int walk_chain(struct nameidata *nd, int follow)
@@ -2097,9 +2097,10 @@ static inline int walk_chain(struct nameidata *nd, int follow)
 	struct path path;
 	struct list_head *dchain_list = &nd->chain.dchain_list;
 	struct dentry *dentry, *cache_dentry;
+	struct inode *inode;
 	struct chain_dentry *new_chain;
 	unsigned seq = 0;
-	bool need_lookup;
+	bool need_lookup = 0;
 	int err = 0;
 
 	if(unlikely(nd->last_type != LAST_NORM)){
@@ -2107,7 +2108,6 @@ static inline int walk_chain(struct nameidata *nd, int follow)
 			dchain_list_pop(nd);
 			if(!nd->chain.chain_size)
 				inode_unlock_shared(nd->chain.chain_parent->d_inode);
-				// mutex_unlock(&nd->chain_parent->d_inode->i_mutex);
 			return 0;
 		}
 		else if(nd->chain.chain_size > 0 && nd->last_type == LAST_DOT){
@@ -2132,36 +2132,45 @@ static inline int walk_chain(struct nameidata *nd, int follow)
 	else {
 		nd->chain.chain_parent = nd->path.dentry;
 		inode_lock_shared(nd->chain.chain_parent->d_inode);
-		// mutex_lock(&nd->chain_parent->d_inode->i_mutex);
 		dentry = nd->path.dentry;
 	}
 
 	printk(KERN_ALERT "Walk chain call %s\n", nd->last.name);
 	cache_dentry = lookup_dcache(&nd->last, dentry, nd->flags);
+	printk(KERN_ALERT "Dentry pointer %p\n", cache_dentry);
 	if (cache_dentry == NULL){
 		printk(KERN_ALERT "Walk chain need lookup\n");
 		need_lookup = 1;
 		dentry = d_alloc(dentry, &nd->last);
-	}else{
+	} else if(IS_ERR(cache_dentry)){
+		err = PTR_ERR(cache_dentry);
+		goto out_err;
+	} else{
+		printk(KERN_ALERT "Dentry inode pointer %p\n", cache_dentry->d_inode);
+		printk(KERN_ALERT "Dentry parent pointer %p\n", cache_dentry->d_parent);
 		printk(KERN_ALERT "Walk chain cache\n");
+		// dput(dentry);
 		dentry = cache_dentry;
 	}
-
-	if(IS_ERR(dentry)){
-		err = PTR_ERR(dentry);
-		goto out_err;
-	}
+	printk(KERN_ALERT "Walk chain 1\n");
+	// printk(KERN_ALERT "Dentry %s PARENT lock count %d\n", dentry->d_parent->d_name.name, dentry->d_parent->d_lockref.count);
+	// printk(KERN_ALERT "Dentry %s lock count \n", dentry->d_name.name);
+	
+	printk(KERN_ALERT "Walk chain 2\n");
 
 	path.dentry = dentry;
 	path.mnt = nd->path.mnt;
+	printk(KERN_ALERT "Walk chain 3\n");
 	if(!need_lookup) {
 		// if(d_mountpoint(path->dentry)) {
-		// 	follow_mount(path);
+		// follow_managed(&path, nd);
 		// }
 		err = follow_managed(&path, nd);
-		if (unlikely(err < 0))
-			return err;
-
+		printk(KERN_ALERT "Walk chain 4\n");
+		if (unlikely(err < 0)) {
+			goto out_err;
+		}
+		printk(KERN_ALERT "Walk chain 5\n");
 		// if(should_follow_link(path->dentry, follow)){
 		// 	mutex_unlock(&nd->chain_parent->d_inode->i_mutex);
 
@@ -2169,18 +2178,30 @@ static inline int walk_chain(struct nameidata *nd, int follow)
 		// }
 		if (unlikely(d_is_negative(path.dentry))) {
 			path_to_nameidata(&path, nd);
-			return -ENOENT;
+			err = -ENOENT;
+			goto out_err;
 		}
-
+		printk(KERN_ALERT "Walk chain 6\n");
 		//if(nd->chain_size)
 		free_dchain_list(nd);
+		printk(KERN_ALERT "Walk chain 7\n");
 		inode_unlock_shared(nd->chain.chain_parent->d_inode);
+		printk(KERN_ALERT "Walk chain 8\n");
+		inode = d_backing_inode(path.dentry);
+		printk(KERN_ALERT "Walk chain 9\n");
 		// mutex_unlock(&nd->chain_parent->d_inode->i_mutex);
 		// if(unlikely(!dentry->d_inode)) {//maybe d_is_negative(dentry)???
 		// 	terminate_walk(nd);
 		// 	return -ENOENT;
 		// }
-		return step_into(nd, &path, follow, nd->inode, seq);
+		path_to_nameidata(&path, nd);
+		printk(KERN_ALERT "Walk chain 10\n");
+		nd->inode = inode;
+		printk(KERN_ALERT "Walk chain 11\n");
+		// err = step_into(nd, &path, follow, inode, seq);
+		// printk(KERN_ALERT "nd path after step into %s %ld\n", nd->path.dentry->d_name.name, nd->inode->i_ino);
+		// printk(KERN_ALERT "Dentry lock count after step_into %d\n", dentry->d_lockref.count);
+		return 0; 
 	} else {
 		new_chain = kmalloc(sizeof(struct chain_dentry), GFP_KERNEL);
 
@@ -2190,7 +2211,7 @@ static inline int walk_chain(struct nameidata *nd, int follow)
 		}
 		// d_set_type(dentry, DCACHE_CHAIN_TEMP);
 		new_chain->name = nd->last;
-		printk(KERN_ALERT "new_chain %s", new_chain->name.name);
+		// printk(KERN_ALERT "new_chain %s", new_chain->name.name);
 		new_chain->dentry = dentry;
 		list_add_tail(&new_chain->list, dchain_list);
 		nd->chain.chain_size++;
@@ -2205,10 +2226,10 @@ static inline int walk_chain(struct nameidata *nd, int follow)
 	return err;
 
 out_err:
+	printk(KERN_ALERT "Out error %d\n", err);
 	terminate_walk(nd);
 	free_dchain_list(nd);
 	inode_unlock_shared(nd->chain.chain_parent->d_inode);
-	// mutex_unlock(&nd->chain_parent->d_inode->i_mutex);
 	return err;
 }
 static int link_path_walk(const char *name, struct nameidata *nd)
@@ -2285,6 +2306,7 @@ OK:
 			// err = walk_component(nd, WALK_FOLLOW | WALK_MORE);
 			if(likely(nd->inode) && nd->inode->i_op && nd->inode->i_op->chain_lookup && !(nd->flags & LOOKUP_AUTOMOUNT)){
  				err = walk_chain(nd, WALK_FOLLOW | WALK_MORE);
+ 				printk(KERN_ALERT "Walk_chain returned %d\n", err);
 	 		}
 	 		else{
 	 			err = walk_component(nd, WALK_FOLLOW | WALK_MORE);
@@ -2415,24 +2437,24 @@ static const char *path_init(struct nameidata *nd, unsigned flags)
 static const char *trailing_symlink(struct nameidata *nd)
 {
 	const char *s;
-	if (nd->path.dentry->d_inode && nd->path.dentry->d_inode->i_op && nd->path.dentry->d_inode->i_op->chain_lookup && !(nd->flags & LOOKUP_AUTOMOUNT))
-		printk(KERN_ALERT "Trailing symlink start\n");
+	// if (nd->path.dentry->d_inode && nd->path.dentry->d_inode->i_op && nd->path.dentry->d_inode->i_op->chain_lookup && !(nd->flags & LOOKUP_AUTOMOUNT))
+	// 	printk(KERN_ALERT "Trailing symlink start\n");
 	int error = may_follow_link(nd);
-	if (nd->path.dentry->d_inode && nd->path.dentry->d_inode->i_op && nd->path.dentry->d_inode->i_op->chain_lookup && !(nd->flags & LOOKUP_AUTOMOUNT))
-		printk(KERN_ALERT "may follow_link %d\n", error);
+	// if (nd->path.dentry->d_inode && nd->path.dentry->d_inode->i_op && nd->path.dentry->d_inode->i_op->chain_lookup && !(nd->flags & LOOKUP_AUTOMOUNT))
+	// 	printk(KERN_ALERT "may follow_link %d\n", error);
 	if (unlikely(error))
 		return ERR_PTR(error);
-	if (nd->path.dentry->d_inode && nd->path.dentry->d_inode->i_op && nd->path.dentry->d_inode->i_op->chain_lookup && !(nd->flags & LOOKUP_AUTOMOUNT))
-		printk(KERN_ALERT "Trailing symlink error\n");
+	// if (nd->path.dentry->d_inode && nd->path.dentry->d_inode->i_op && nd->path.dentry->d_inode->i_op->chain_lookup && !(nd->flags & LOOKUP_AUTOMOUNT))
+	// 	printk(KERN_ALERT "Trailing symlink error\n");
 	nd->flags |= LOOKUP_PARENT;
-	if (nd->path.dentry->d_inode && nd->path.dentry->d_inode->i_op && nd->path.dentry->d_inode->i_op->chain_lookup && !(nd->flags & LOOKUP_AUTOMOUNT))
-		printk(KERN_ALERT "Trailing symlink nd flags\n");
+	// if (nd->path.dentry->d_inode && nd->path.dentry->d_inode->i_op && nd->path.dentry->d_inode->i_op->chain_lookup && !(nd->flags & LOOKUP_AUTOMOUNT))
+	// 	printk(KERN_ALERT "Trailing symlink nd flags\n");
 	nd->stack[0].name = NULL;
-	if (nd->path.dentry->d_inode && nd->path.dentry->d_inode->i_op && nd->path.dentry->d_inode->i_op->chain_lookup && !(nd->flags & LOOKUP_AUTOMOUNT))
-		printk(KERN_ALERT "Trailing symlink stack\n");
+	// if (nd->path.dentry->d_inode && nd->path.dentry->d_inode->i_op && nd->path.dentry->d_inode->i_op->chain_lookup && !(nd->flags & LOOKUP_AUTOMOUNT))
+	// 	printk(KERN_ALERT "Trailing symlink stack\n");
 	s = get_link(nd);
-	if (nd->path.dentry->d_inode && nd->path.dentry->d_inode->i_op && nd->path.dentry->d_inode->i_op->chain_lookup && !(nd->flags & LOOKUP_AUTOMOUNT))
-		printk(KERN_ALERT "Trailing symlink get link %s\n", s);
+	// if (nd->path.dentry->d_inode && nd->path.dentry->d_inode->i_op && nd->path.dentry->d_inode->i_op->chain_lookup && !(nd->flags & LOOKUP_AUTOMOUNT))
+	// 	printk(KERN_ALERT "Trailing symlink get link %s\n", s);
 	return s ? s : "";
 }
 
@@ -2442,15 +2464,18 @@ static inline int lookup_last(struct nameidata *nd)
 		nd->flags |= LOOKUP_FOLLOW | LOOKUP_DIRECTORY;
 	if (nd->path.dentry->d_inode && nd->path.dentry->d_inode->i_op && nd->path.dentry->d_inode->i_op->chain_lookup && !(nd->flags & LOOKUP_AUTOMOUNT)){
 		int err = 0;
+		printk(KERN_ALERT "lookup_last dentry %s inode %ld\n", nd->path.dentry->d_name.name, nd->inode->i_ino);
 		err = walk_chain(nd, 0);
-		if (err)
+		if (err){
 			return err;
+		}
 		
-		if (!nd->chain.chain_size)
+		if (!nd->chain.chain_size){
+			// dput(nd->path.dentry);
 			return err;
+		}
 
 		err = chain_lookup(nd, &nd->path);
-		printk(KERN_ALERT "lookup_last dentry %s inode %ld\n", nd->path.dentry->d_name.name, nd->inode->i_ino);
 		return err;
 	}
 	nd->flags &= ~LOOKUP_PARENT;

@@ -1474,7 +1474,7 @@ static struct dentry * nfs_fill_dchain_list(struct dchain_data *chain, struct nf
 			dentry->d_inode = NULL;
 
 		d_add(dentry, inode);
-		dentry->d_inode = inode;
+		// dentry->d_inode = inode;
 		// if (res != NULL) {
 		// 	if (IS_ERR(res))
 		// 		return res;
@@ -1490,7 +1490,7 @@ static struct dentry * nfs_fill_dchain_list(struct dchain_data *chain, struct nf
 		// 	dput(dentry);
 		// 	dentry = old;
 		// }
-		printk(KERN_ALERT "return inode %lu fill %s\n", inode->i_ino, dentry->d_name.name);
+		printk(KERN_ALERT "return inode %lu fill %s parent %s\n", dentry->d_inode->i_ino, dentry->d_name.name, dentry->d_parent->d_name.name);
 		// if (res != NULL) {
 		// 	if (IS_ERR(res)){
 		// 		return res;

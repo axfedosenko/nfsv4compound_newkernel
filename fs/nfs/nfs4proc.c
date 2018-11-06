@@ -3695,22 +3695,22 @@ static int nfs4_proc_chain_lookup(struct inode *dir, struct list_head *dchain_li
 		.rpc_argp = &args,
 		.rpc_resp = &res,
 	};
-	printk(KERN_ALERT "NFS PROC STRUCT");
+	// printk(KERN_ALERT "NFS PROC STRUCT");
 	// arglen = rpc_proc->p_arglen;
 	// replen = rpc_proc->p_replen;
 	// rpc_proc->p_arglen = arglen*size;
 	// rpc_proc->p_replen = replen*size;
 	// msg.rpc_proc->p_arglen *= size;
 	// msg.rpc_proc->p_replen *= size;
-	printk(KERN_ALERT "NFS PROC ARGLEN");
-	printk(KERN_ALERT "p_arglen %d", msg.rpc_proc->p_arglen);
+	// printk(KERN_ALERT "NFS PROC ARGLEN");
+	// printk(KERN_ALERT "p_arglen %d", msg.rpc_proc->p_arglen);
 	args.bitmask = nfs4_bitmask(server, NULL);
 	
 	for(i = 0; i < size; ++i)
 		nfs_fattr_init(fattrs[i]);
-	printk(KERN_ALERT "NFS PROC FATTR");
+	// printk(KERN_ALERT "NFS PROC FATTR");
 	status = nfs4_call_sync(client, server, &msg, &args.seq_args, &res.seq_res, 0);
-	printk(KERN_ALERT "NFS PROC END");
+	// printk(KERN_ALERT "NFS PROC END");
 	// rpc_proc->p_arglen = arglen;
 	// rpc_proc->p_replen = replen;
 	return status;
