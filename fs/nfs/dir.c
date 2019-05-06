@@ -1453,7 +1453,7 @@ static int nfs_allocate_handles(struct nfs_fh ***fhandles, struct nfs_fattr ***f
 
 static struct dentry * nfs_fill_dchain_list(struct dchain_data *chain, struct nfs_fh **fhandles, 
 				struct nfs_fattr **fattrs, struct nfs4_label **labels, struct dentry *parent){
-	int i = 0;
+	int i = 0, err = 0;
 	struct list_head *cur_pos;
 	struct inode *inode = NULL;
 	struct dentry *dentry = NULL;
@@ -1468,12 +1468,28 @@ static struct dentry * nfs_fill_dchain_list(struct dchain_data *chain, struct nf
 
 		inode = nfs_fhget(parent->d_sb, fhandles[i], fattrs[i], labels[i]);
 		i++;
-		printk(KERN_ALERT "Inode %ld %d %ld\n", inode->i_ino, inode->i_mode, inode->i_ctime.tv_nsec);
 		res = ERR_CAST(inode);
-		if (IS_ERR(res))
-			dentry->d_inode = NULL;
+		if (IS_ERR(res)) {
+			d_lookup_done(dentry);
+			d_add(dentry, NULL);			
+			break;
+		}
+		printk(KERN_ALERT "Inode %ld %d %ld\n", inode->i_ino, inode->i_mode, inode->i_ctime.tv_nsec);
 
+		d_lookup_done(dentry);
 		d_add(dentry, inode);
+		// res = d_splice_alias(inode, dentry);
+		// if (res != NULL) {
+			// if (IS_ERR(res))
+				// goto out_label;
+		// 	dentry = res;
+		// }
+		nfs_set_verifier(dentry, nfs_save_change_attribute(parent->d_inode));
+		inode = d_backing_inode(dentry);
+		printk(KERN_ALERT "Fill %s dentry %p.\n", dentry->d_name.name, dentry);
+		
+		// printk(KERN_ALERT "Free After_ dput %s, count %d\n", dentry->d_parent->d_name.name, dentry->d_parent->d_lockref.count);
+		// d_add(dentry, inode);
 		// dentry->d_inode = inode;
 		// if (res != NULL) {
 		// 	if (IS_ERR(res))
@@ -1485,7 +1501,6 @@ static struct dentry * nfs_fill_dchain_list(struct dchain_data *chain, struct nf
 		/* Notify readdir to use READDIRPLUS */
 
 		
-		// d_lookup_done(dentry);
 		// if (unlikely(old)) {
 		// 	dput(dentry);
 		// 	dentry = old;
@@ -1497,10 +1512,17 @@ static struct dentry * nfs_fill_dchain_list(struct dchain_data *chain, struct nf
 		// 	}
 		// 	dchain_entry->dentry = res;
 		// }
-		
+		printk(KERN_ALERT "Fill dentry name %s count %d\n", dentry->d_name.name, dentry->d_lockref.count);
 		if(d_is_symlink(dentry)){
+			chain->dentry = dentry;
+			chain->inode = inode;
 			printk(KERN_ALERT "Found symlink %s\n", dentry->d_name.name);
 			res = ERR_PTR(10);
+			break;
+		}
+		err = inode_permission(inode, MAY_EXEC);
+		if (err) {
+			res = ERR_PTR(err);
 			break;
 		}
 	}
@@ -1551,6 +1573,10 @@ int nfs_chain_lookup(struct dchain_data *chain) {
 	struct inode* dir;
 	struct list_head *dchain_list = &chain->dchain_list;
 
+	printk(KERN_ALERT "nfs chain lookup size %d\n", chain->chain_size);
+	if(!chain->chain_size) {
+		return 0;
+	}
 
 	dir = parent->d_inode;
 	
@@ -1562,21 +1588,25 @@ int nfs_chain_lookup(struct dchain_data *chain) {
 	// nfs_block_sillyrename(parent);
 	
 	error = NFS_PROTO(dir)->chain_lookup(dir, dchain_list, fhandles, fattrs, labels, chain->chain_size);
+	printk(KERN_ALERT "nfs chain lookup op res %d\n", error);
 	if (error < 0 && error != -ENOENT && error != -EACCES && error != -40)
 		goto out_unblock_sillyrename;
 	
 	res = nfs_fill_dchain_list(chain, fhandles, fattrs, labels, parent);
 	nfs_force_use_readdirplus(dir);
 
-	if(PTR_ERR(res) == 10){
+	if (PTR_ERR(res) == 10){
 		error = 10;
+	}
+	if (PTR_ERR(res) < 0) {
+		return PTR_ERR(res);
 	}
 out_unblock_sillyrename:
 	// nfs_unblock_sillyrename(parent);
 out:
 //	mutex_unlock(&parent->d_inode->i_mutex);
 
-	dput(parent);
+	// dput(parent);
 	nfs_free_handles(fhandles, fattrs, labels, chain->chain_size);
 	
 	return error;
