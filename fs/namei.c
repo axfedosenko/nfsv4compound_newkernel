@@ -2212,7 +2212,7 @@ static inline int walk_chain(struct nameidata *nd, int follow)
 	if (cache_dentry == NULL) {
 		printk(KERN_ALERT "Walk chain need lookup %s\n", nd->last.name);
 		dentry = d_alloc(dentry, &nd->last);
-		dentry->d_flags &= DCACHE_RCUACCESS;
+		//dentry->d_flags &= DCACHE_RCUACCESS;
 		path.dentry = dentry;
 		path.mnt = nd->path.mnt;
 		

@@ -1653,11 +1653,11 @@ static struct dentry * nfs_fill_dchain_list(struct dchain_data *chain, struct nf
 			res = ERR_PTR(10);
 			break;
 		}
-		err = inode_permission(inode, MAY_EXEC);
-		if (err) {
-			res = ERR_PTR(err);
-			break;
-		}
+		//err = inode_permission(inode, MAY_EXEC);
+		//if (err) {
+		//	res = ERR_PTR(err);
+		//	break;
+		//}
 	}
 
 	chain->dentry = dentry;
@@ -1731,9 +1731,11 @@ int nfs_chain_lookup(struct dchain_data *chain) {
 	if (PTR_ERR(res) == 10){
 		error = 10;
 	}
-	if (PTR_ERR(res) < 0) {
-		return PTR_ERR(res);
-	}
+        //if (error < 0)
+	//if (PTR_ERR(res) < 0) {
+	//	error = PTR_ERR(res);
+        //        goto out;
+	//}
 out_unblock_sillyrename:
 	// nfs_unblock_sillyrename(parent);
 out:

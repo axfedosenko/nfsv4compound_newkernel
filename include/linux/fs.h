@@ -1855,7 +1855,7 @@ struct inode_operations {
 	int (*update_time)(struct inode *, struct timespec64 *, int);
 	int (*atomic_open)(struct inode *, struct dentry *,
 			   struct file *, unsigned open_flag,
-			   umode_t create_mode, int *opened);
+			   umode_t create_mode);
 	int (*chain_lookup) (struct dchain_data *);
 	int (*chain_lookup_open) (struct dchain_data *, struct dentry *,
 			   struct file *, unsigned open_flag,
