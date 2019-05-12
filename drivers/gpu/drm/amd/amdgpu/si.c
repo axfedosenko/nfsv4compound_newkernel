@@ -47,6 +47,7 @@
 #include "dce/dce_6_0_d.h"
 #include "uvd/uvd_4_0_d.h"
 #include "bif/bif_3_0_d.h"
+#include "bif/bif_3_0_sh_mask.h"
 
 static const u32 tahiti_golden_registers[] =
 {
@@ -1252,6 +1253,128 @@ static void si_invalidate_hdp(struct amdgpu_device *adev,
 	}
 }
 
+static bool si_need_full_reset(struct amdgpu_device *adev)
+{
+	/* change this when we support soft reset */
+	return true;
+}
+
+static bool si_need_reset_on_init(struct amdgpu_device *adev)
+{
+	return false;
+}
+
+static int si_get_pcie_lanes(struct amdgpu_device *adev)
+{
+	u32 link_width_cntl;
+
+	if (adev->flags & AMD_IS_APU)
+		return 0;
+
+	link_width_cntl = RREG32_PCIE_PORT(PCIE_LC_LINK_WIDTH_CNTL);
+
+	switch ((link_width_cntl & LC_LINK_WIDTH_RD_MASK) >> LC_LINK_WIDTH_RD_SHIFT) {
+	case LC_LINK_WIDTH_X1:
+		return 1;
+	case LC_LINK_WIDTH_X2:
+		return 2;
+	case LC_LINK_WIDTH_X4:
+		return 4;
+	case LC_LINK_WIDTH_X8:
+		return 8;
+	case LC_LINK_WIDTH_X0:
+	case LC_LINK_WIDTH_X16:
+	default:
+		return 16;
+	}
+}
+
+static void si_set_pcie_lanes(struct amdgpu_device *adev, int lanes)
+{
+	u32 link_width_cntl, mask;
+
+	if (adev->flags & AMD_IS_APU)
+		return;
+
+	switch (lanes) {
+	case 0:
+		mask = LC_LINK_WIDTH_X0;
+		break;
+	case 1:
+		mask = LC_LINK_WIDTH_X1;
+		break;
+	case 2:
+		mask = LC_LINK_WIDTH_X2;
+		break;
+	case 4:
+		mask = LC_LINK_WIDTH_X4;
+		break;
+	case 8:
+		mask = LC_LINK_WIDTH_X8;
+		break;
+	case 16:
+		mask = LC_LINK_WIDTH_X16;
+		break;
+	default:
+		DRM_ERROR("invalid pcie lane request: %d\n", lanes);
+		return;
+	}
+
+	link_width_cntl = RREG32_PCIE_PORT(PCIE_LC_LINK_WIDTH_CNTL);
+	link_width_cntl &= ~LC_LINK_WIDTH_MASK;
+	link_width_cntl |= mask << LC_LINK_WIDTH_SHIFT;
+	link_width_cntl |= (LC_RECONFIG_NOW |
+			    LC_RECONFIG_ARC_MISSING_ESCAPE);
+
+	WREG32_PCIE_PORT(PCIE_LC_LINK_WIDTH_CNTL, link_width_cntl);
+}
+
+static void si_get_pcie_usage(struct amdgpu_device *adev, uint64_t *count0,
+			      uint64_t *count1)
+{
+	uint32_t perfctr = 0;
+	uint64_t cnt0_of, cnt1_of;
+	int tmp;
+
+	/* This reports 0 on APUs, so return to avoid writing/reading registers
+	 * that may or may not be different from their GPU counterparts
+	 */
+        if (adev->flags & AMD_IS_APU)
+                return;
+
+	/* Set the 2 events that we wish to watch, defined above */
+	/* Reg 40 is # received msgs, Reg 104 is # of posted requests sent */
+	perfctr = REG_SET_FIELD(perfctr, PCIE_PERF_CNTL_TXCLK, EVENT0_SEL, 40);
+	perfctr = REG_SET_FIELD(perfctr, PCIE_PERF_CNTL_TXCLK, EVENT1_SEL, 104);
+
+	/* Write to enable desired perf counters */
+	WREG32_PCIE(ixPCIE_PERF_CNTL_TXCLK, perfctr);
+	/* Zero out and enable the perf counters
+	 * Write 0x5:
+	 * Bit 0 = Start all counters(1)
+	 * Bit 2 = Global counter reset enable(1)
+	 */
+	WREG32_PCIE(ixPCIE_PERF_COUNT_CNTL, 0x00000005);
+
+	msleep(1000);
+
+	/* Load the shadow and disable the perf counters
+	 * Write 0x2:
+	 * Bit 0 = Stop counters(0)
+	 * Bit 1 = Load the shadow counters(1)
+	 */
+	WREG32_PCIE(ixPCIE_PERF_COUNT_CNTL, 0x00000002);
+
+	/* Read register values to get any >32bit overflow */
+	tmp = RREG32_PCIE(ixPCIE_PERF_CNTL_TXCLK);
+	cnt0_of = REG_GET_FIELD(tmp, PCIE_PERF_CNTL_TXCLK, COUNTER0_UPPER);
+	cnt1_of = REG_GET_FIELD(tmp, PCIE_PERF_CNTL_TXCLK, COUNTER1_UPPER);
+
+	/* Get the values and add the overflow */
+	*count0 = RREG32_PCIE(ixPCIE_PERF_COUNT0_TXCLK) | (cnt0_of << 32);
+	*count1 = RREG32_PCIE(ixPCIE_PERF_COUNT1_TXCLK) | (cnt1_of << 32);
+}
+
 static const struct amdgpu_asic_funcs si_asic_funcs =
 {
 	.read_disabled_bios = &si_read_disabled_bios,
@@ -1262,9 +1385,14 @@ static const struct amdgpu_asic_funcs si_asic_funcs =
 	.get_xclk = &si_get_xclk,
 	.set_uvd_clocks = &si_set_uvd_clocks,
 	.set_vce_clocks = NULL,
+	.get_pcie_lanes = &si_get_pcie_lanes,
+	.set_pcie_lanes = &si_set_pcie_lanes,
 	.get_config_memsize = &si_get_config_memsize,
 	.flush_hdp = &si_flush_hdp,
 	.invalidate_hdp = &si_invalidate_hdp,
+	.need_full_reset = &si_need_full_reset,
+	.get_pcie_usage = &si_get_pcie_usage,
+	.need_reset_on_init = &si_need_reset_on_init,
 };
 
 static uint32_t si_get_rev_id(struct amdgpu_device *adev)
@@ -1308,7 +1436,7 @@ static int si_common_early_init(void *handle)
 			AMD_CG_SUPPORT_UVD_MGCG |
 			AMD_CG_SUPPORT_HDP_LS |
 			AMD_CG_SUPPORT_HDP_MGCG;
-			adev->pg_flags = 0;
+		adev->pg_flags = 0;
 		adev->external_rev_id = (adev->rev_id == 0) ? 1 :
 					(adev->rev_id == 1) ? 5 : 6;
 		break;
@@ -1983,13 +2111,13 @@ int si_set_ip_blocks(struct amdgpu_device *adev)
 		amdgpu_device_ip_block_add(adev, &si_common_ip_block);
 		amdgpu_device_ip_block_add(adev, &gmc_v6_0_ip_block);
 		amdgpu_device_ip_block_add(adev, &si_ih_ip_block);
+		amdgpu_device_ip_block_add(adev, &gfx_v6_0_ip_block);
+		amdgpu_device_ip_block_add(adev, &si_dma_ip_block);
 		amdgpu_device_ip_block_add(adev, &si_smu_ip_block);
 		if (adev->enable_virtual_display)
 			amdgpu_device_ip_block_add(adev, &dce_virtual_ip_block);
 		else
 			amdgpu_device_ip_block_add(adev, &dce_v6_0_ip_block);
-		amdgpu_device_ip_block_add(adev, &gfx_v6_0_ip_block);
-		amdgpu_device_ip_block_add(adev, &si_dma_ip_block);
 		/* amdgpu_device_ip_block_add(adev, &uvd_v3_1_ip_block); */
 		/* amdgpu_device_ip_block_add(adev, &vce_v1_0_ip_block); */
 		break;
@@ -1997,13 +2125,14 @@ int si_set_ip_blocks(struct amdgpu_device *adev)
 		amdgpu_device_ip_block_add(adev, &si_common_ip_block);
 		amdgpu_device_ip_block_add(adev, &gmc_v6_0_ip_block);
 		amdgpu_device_ip_block_add(adev, &si_ih_ip_block);
+		amdgpu_device_ip_block_add(adev, &gfx_v6_0_ip_block);
+		amdgpu_device_ip_block_add(adev, &si_dma_ip_block);
 		amdgpu_device_ip_block_add(adev, &si_smu_ip_block);
 		if (adev->enable_virtual_display)
 			amdgpu_device_ip_block_add(adev, &dce_virtual_ip_block);
 		else
 			amdgpu_device_ip_block_add(adev, &dce_v6_4_ip_block);
-		amdgpu_device_ip_block_add(adev, &gfx_v6_0_ip_block);
-		amdgpu_device_ip_block_add(adev, &si_dma_ip_block);
+
 		/* amdgpu_device_ip_block_add(adev, &uvd_v3_1_ip_block); */
 		/* amdgpu_device_ip_block_add(adev, &vce_v1_0_ip_block); */
 		break;
@@ -2011,11 +2140,11 @@ int si_set_ip_blocks(struct amdgpu_device *adev)
 		amdgpu_device_ip_block_add(adev, &si_common_ip_block);
 		amdgpu_device_ip_block_add(adev, &gmc_v6_0_ip_block);
 		amdgpu_device_ip_block_add(adev, &si_ih_ip_block);
+		amdgpu_device_ip_block_add(adev, &gfx_v6_0_ip_block);
+		amdgpu_device_ip_block_add(adev, &si_dma_ip_block);
 		amdgpu_device_ip_block_add(adev, &si_smu_ip_block);
 		if (adev->enable_virtual_display)
 			amdgpu_device_ip_block_add(adev, &dce_virtual_ip_block);
-		amdgpu_device_ip_block_add(adev, &gfx_v6_0_ip_block);
-		amdgpu_device_ip_block_add(adev, &si_dma_ip_block);
 		break;
 	default:
 		BUG();

@@ -155,6 +155,7 @@ ipi_interrupt(int irq, void *dev_id)
 
 			case IPI_CALL_FUNC:
 				smp_debug(100, KERN_DEBUG "CPU%d IPI_CALL_FUNC\n", this_cpu);
+				inc_irq_stat(irq_call_count);
 				generic_smp_call_function_interrupt();
 				break;
 
@@ -423,8 +424,7 @@ int __cpu_up(unsigned int cpu, struct task_struct *tidle)
 }
 
 #ifdef CONFIG_PROC_FS
-int __init
-setup_profiling_timer(unsigned int multiplier)
+int setup_profiling_timer(unsigned int multiplier)
 {
 	return -EINVAL;
 }

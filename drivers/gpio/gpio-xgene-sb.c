@@ -143,12 +143,14 @@ static int xgene_gpio_sb_domain_activate(struct irq_domain *d,
 {
 	struct xgene_gpio_sb *priv = d->host_data;
 	u32 gpio = HWIRQ_TO_GPIO(priv, irq_data->hwirq);
+	int ret;
 
-	if (gpiochip_lock_as_irq(&priv->gc, gpio)) {
+	ret = gpiochip_lock_as_irq(&priv->gc, gpio);
+	if (ret) {
 		dev_err(priv->gc.parent,
 		"Unable to configure XGene GPIO standby pin %d as IRQ\n",
 				gpio);
-		return -ENOSPC;
+		return ret;
 	}
 
 	xgene_gpio_set_bit(&priv->gc, priv->regs + MPA_GPIO_SEL_LO,
@@ -227,7 +229,6 @@ static int xgene_gpio_sb_probe(struct platform_device *pdev)
 {
 	struct xgene_gpio_sb *priv;
 	int ret;
-	struct resource *res;
 	void __iomem *regs;
 	struct irq_domain *parent_domain = NULL;
 	u32 val32;
@@ -236,8 +237,7 @@ static int xgene_gpio_sb_probe(struct platform_device *pdev)
 	if (!priv)
 		return -ENOMEM;
 
-	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	regs = devm_ioremap_resource(&pdev->dev, res);
+	regs = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(regs))
 		return PTR_ERR(regs);
 

@@ -100,6 +100,7 @@ struct name_table {
 	struct hlist_head services[TIPC_NAMETBL_SIZE];
 	struct list_head node_scope;
 	struct list_head cluster_scope;
+	rwlock_t cluster_scope_lock;
 	u32 local_publ_count;
 };
 
@@ -126,20 +127,15 @@ struct publication *tipc_nametbl_insert_publ(struct net *net, u32 type,
 struct publication *tipc_nametbl_remove_publ(struct net *net, u32 type,
 					     u32 lower, u32 upper,
 					     u32 node, u32 key);
-void tipc_nametbl_subscribe(struct tipc_subscription *s);
+bool tipc_nametbl_subscribe(struct tipc_subscription *s);
 void tipc_nametbl_unsubscribe(struct tipc_subscription *s);
 int tipc_nametbl_init(struct net *net);
 void tipc_nametbl_stop(struct net *net);
 
 struct tipc_dest {
 	struct list_head list;
-	union {
-		struct {
-			u32 port;
-			u32 node;
-		};
-		u64 value;
-	};
+	u32 port;
+	u32 node;
 };
 
 struct tipc_dest *tipc_dest_find(struct list_head *l, u32 node, u32 port);

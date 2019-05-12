@@ -832,8 +832,9 @@ int acpi_video_get_levels(struct acpi_device *device,
 	 * in order to account for buggy BIOS which don't export the first two
 	 * special levels (see below)
 	 */
-	br->levels = kmalloc((obj->package.count + ACPI_VIDEO_FIRST_LEVEL) *
-	                     sizeof(*br->levels), GFP_KERNEL);
+	br->levels = kmalloc_array(obj->package.count + ACPI_VIDEO_FIRST_LEVEL,
+				   sizeof(*br->levels),
+				   GFP_KERNEL);
 	if (!br->levels) {
 		result = -ENOMEM;
 		goto out_free;
@@ -2123,6 +2124,33 @@ static int __init intel_opregion_present(void)
 	return opregion;
 }
 
+/* Check if the chassis-type indicates there is no builtin LCD panel */
+static bool dmi_is_desktop(void)
+{
+	const char *chassis_type;
+	unsigned long type;
+
+	chassis_type = dmi_get_system_info(DMI_CHASSIS_TYPE);
+	if (!chassis_type)
+		return false;
+
+	if (kstrtoul(chassis_type, 10, &type) != 0)
+		return false;
+
+	switch (type) {
+	case 0x03: /* Desktop */
+	case 0x04: /* Low Profile Desktop */
+	case 0x05: /* Pizza Box */
+	case 0x06: /* Mini Tower */
+	case 0x07: /* Tower */
+	case 0x10: /* Lunch Box */
+	case 0x11: /* Main Server Chassis */
+		return true;
+	}
+
+	return false;
+}
+
 int acpi_video_register(void)
 {
 	int ret = 0;
@@ -2143,8 +2171,12 @@ int acpi_video_register(void)
 	 * win8 ready (where we also prefer the native backlight driver, so
 	 * normally the acpi_video code should not register there anyways).
 	 */
-	if (only_lcd == -1)
-		only_lcd = acpi_osi_is_win8();
+	if (only_lcd == -1) {
+		if (dmi_is_desktop() && acpi_osi_is_win8())
+			only_lcd = true;
+		else
+			only_lcd = false;
+	}
 
 	dmi_check_system(video_dmi_table);
 

@@ -58,7 +58,10 @@ static const struct scsi_dh_blist scsi_dh_blist[] = {
 	{"IBM", "3526",			"rdac", },
 	{"IBM", "3542",			"rdac", },
 	{"IBM", "3552",			"rdac", },
-	{"SGI", "TP9",			"rdac", },
+	{"SGI", "TP9300",		"rdac", },
+	{"SGI", "TP9400",		"rdac", },
+	{"SGI", "TP9500",		"rdac", },
+	{"SGI", "TP9700",		"rdac", },
 	{"SGI", "IS",			"rdac", },
 	{"STK", "OPENstorage",		"rdac", },
 	{"STK", "FLEXLINE 380",		"rdac", },
@@ -72,6 +75,7 @@ static const struct scsi_dh_blist scsi_dh_blist[] = {
 	{"NETAPP", "INF-01-00",		"rdac", },
 	{"LSI", "INF-01-00",		"rdac", },
 	{"ENGENIO", "INF-01-00",	"rdac", },
+	{"LENOVO", "DE_Series",		"rdac", },
 	{NULL, NULL,			NULL },
 };
 
@@ -111,6 +115,9 @@ static struct scsi_device_handler *__scsi_dh_lookup(const char *name)
 static struct scsi_device_handler *scsi_dh_lookup(const char *name)
 {
 	struct scsi_device_handler *dh;
+
+	if (!name || strlen(name) == 0)
+		return NULL;
 
 	dh = __scsi_dh_lookup(name);
 	if (!dh) {

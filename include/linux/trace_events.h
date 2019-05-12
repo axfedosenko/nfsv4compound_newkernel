@@ -430,11 +430,12 @@ enum event_trigger_type {
 
 extern int filter_match_preds(struct event_filter *filter, void *rec);
 
-extern enum event_trigger_type event_triggers_call(struct trace_event_file *file,
-						   void *rec);
-extern void event_triggers_post_call(struct trace_event_file *file,
-				     enum event_trigger_type tt,
-				     void *rec);
+extern enum event_trigger_type
+event_triggers_call(struct trace_event_file *file, void *rec,
+		    struct ring_buffer_event *event);
+extern void
+event_triggers_post_call(struct trace_event_file *file,
+			 enum event_trigger_type tt);
 
 bool trace_event_ignore_this_pid(struct trace_event_file *trace_file);
 
@@ -454,7 +455,7 @@ trace_trigger_soft_disabled(struct trace_event_file *file)
 
 	if (!(eflags & EVENT_FILE_FL_TRIGGER_COND)) {
 		if (eflags & EVENT_FILE_FL_TRIGGER_MODE)
-			event_triggers_call(file, NULL);
+			event_triggers_call(file, NULL, NULL);
 		if (eflags & EVENT_FILE_FL_SOFT_DISABLED)
 			return true;
 		if (eflags & EVENT_FILE_FL_PID_FILTER)
@@ -470,7 +471,11 @@ void perf_event_detach_bpf_prog(struct perf_event *event);
 int perf_event_query_prog_array(struct perf_event *event, void __user *info);
 int bpf_probe_register(struct bpf_raw_event_map *btp, struct bpf_prog *prog);
 int bpf_probe_unregister(struct bpf_raw_event_map *btp, struct bpf_prog *prog);
-struct bpf_raw_event_map *bpf_find_raw_tracepoint(const char *name);
+struct bpf_raw_event_map *bpf_get_raw_tracepoint(const char *name);
+void bpf_put_raw_tracepoint(struct bpf_raw_event_map *btp);
+int bpf_get_perf_event_info(const struct perf_event *event, u32 *prog_id,
+			    u32 *fd_type, const char **buf,
+			    u64 *probe_offset, u64 *probe_addr);
 #else
 static inline unsigned int trace_call_bpf(struct trace_event_call *call, void *ctx)
 {
@@ -498,9 +503,19 @@ static inline int bpf_probe_unregister(struct bpf_raw_event_map *btp, struct bpf
 {
 	return -EOPNOTSUPP;
 }
-static inline struct bpf_raw_event_map *bpf_find_raw_tracepoint(const char *name)
+static inline struct bpf_raw_event_map *bpf_get_raw_tracepoint(const char *name)
 {
 	return NULL;
+}
+static inline void bpf_put_raw_tracepoint(struct bpf_raw_event_map *btp)
+{
+}
+static inline int bpf_get_perf_event_info(const struct perf_event *event,
+					  u32 *prog_id, u32 *fd_type,
+					  const char **buf, u64 *probe_offset,
+					  u64 *probe_addr)
+{
+	return -EOPNOTSUPP;
 }
 #endif
 
@@ -558,10 +573,18 @@ extern void perf_trace_del(struct perf_event *event, int flags);
 #ifdef CONFIG_KPROBE_EVENTS
 extern int  perf_kprobe_init(struct perf_event *event, bool is_retprobe);
 extern void perf_kprobe_destroy(struct perf_event *event);
+extern int bpf_get_kprobe_info(const struct perf_event *event,
+			       u32 *fd_type, const char **symbol,
+			       u64 *probe_offset, u64 *probe_addr,
+			       bool perf_type_tracepoint);
 #endif
 #ifdef CONFIG_UPROBE_EVENTS
-extern int  perf_uprobe_init(struct perf_event *event, bool is_retprobe);
+extern int  perf_uprobe_init(struct perf_event *event,
+			     unsigned long ref_ctr_offset, bool is_retprobe);
 extern void perf_uprobe_destroy(struct perf_event *event);
+extern int bpf_get_uprobe_info(const struct perf_event *event,
+			       u32 *fd_type, const char **filename,
+			       u64 *probe_offset, bool perf_type_tracepoint);
 #endif
 extern int  ftrace_profile_set_filter(struct perf_event *event, int event_id,
 				     char *filter_str);

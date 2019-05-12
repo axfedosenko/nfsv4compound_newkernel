@@ -1666,7 +1666,6 @@ static const struct efx_hw_stat_desc efx_ef10_stat_desc[EF10_STAT_COUNT] = {
 	EF10_DMA_STAT(fec_corrected_symbols_lane1, FEC_CORRECTED_SYMBOLS_LANE1),
 	EF10_DMA_STAT(fec_corrected_symbols_lane2, FEC_CORRECTED_SYMBOLS_LANE2),
 	EF10_DMA_STAT(fec_corrected_symbols_lane3, FEC_CORRECTED_SYMBOLS_LANE3),
-	EF10_DMA_STAT(ctpio_dmabuf_start, CTPIO_DMABUF_START),
 	EF10_DMA_STAT(ctpio_vi_busy_fallback, CTPIO_VI_BUSY_FALLBACK),
 	EF10_DMA_STAT(ctpio_long_write_success, CTPIO_LONG_WRITE_SUCCESS),
 	EF10_DMA_STAT(ctpio_missing_dbell_fail, CTPIO_MISSING_DBELL_FAIL),
@@ -1777,7 +1776,6 @@ static const struct efx_hw_stat_desc efx_ef10_stat_desc[EF10_STAT_COUNT] = {
  * These bits are in the second u64 of the raw mask.
  */
 #define EF10_CTPIO_STAT_MASK (						\
-	(1ULL << (EF10_STAT_ctpio_dmabuf_start - 64)) |			\
 	(1ULL << (EF10_STAT_ctpio_vi_busy_fallback - 64)) |		\
 	(1ULL << (EF10_STAT_ctpio_long_write_success - 64)) |		\
 	(1ULL << (EF10_STAT_ctpio_missing_dbell_fail - 64)) |		\
@@ -4001,29 +3999,6 @@ static void efx_ef10_prepare_flr(struct efx_nic *efx)
 	atomic_set(&efx->active_queues, 0);
 }
 
-static bool efx_ef10_filter_equal(const struct efx_filter_spec *left,
-				  const struct efx_filter_spec *right)
-{
-	if ((left->match_flags ^ right->match_flags) |
-	    ((left->flags ^ right->flags) &
-	     (EFX_FILTER_FLAG_RX | EFX_FILTER_FLAG_TX)))
-		return false;
-
-	return memcmp(&left->outer_vid, &right->outer_vid,
-		      sizeof(struct efx_filter_spec) -
-		      offsetof(struct efx_filter_spec, outer_vid)) == 0;
-}
-
-static unsigned int efx_ef10_filter_hash(const struct efx_filter_spec *spec)
-{
-	BUILD_BUG_ON(offsetof(struct efx_filter_spec, outer_vid) & 3);
-	return jhash2((const u32 *)&spec->outer_vid,
-		      (sizeof(struct efx_filter_spec) -
-		       offsetof(struct efx_filter_spec, outer_vid)) / 4,
-		      0);
-	/* XXX should we randomise the initval? */
-}
-
 /* Decide whether a filter should be exclusive or else should allow
  * delivery to additional recipients.  Currently we decide that
  * filters for specific local unicast MAC and IP addresses are
@@ -4313,9 +4288,9 @@ static int efx_ef10_filter_pri(struct efx_ef10_filter_table *table,
 	return -EPROTONOSUPPORT;
 }
 
-static s32 efx_ef10_filter_insert(struct efx_nic *efx,
-				  struct efx_filter_spec *spec,
-				  bool replace_equal)
+static s32 efx_ef10_filter_insert_locked(struct efx_nic *efx,
+					 struct efx_filter_spec *spec,
+					 bool replace_equal)
 {
 	DECLARE_BITMAP(mc_rem_map, EFX_EF10_FILTER_SEARCH_LIMIT);
 	struct efx_ef10_nic_data *nic_data = efx->nic_data;
@@ -4332,7 +4307,7 @@ static s32 efx_ef10_filter_insert(struct efx_nic *efx,
 	bool is_mc_recip;
 	s32 rc;
 
-	down_read(&efx->filter_sem);
+	WARN_ON(!rwsem_is_locked(&efx->filter_sem));
 	table = efx->filter_state;
 	down_write(&table->lock);
 
@@ -4348,7 +4323,7 @@ static s32 efx_ef10_filter_insert(struct efx_nic *efx,
 		goto out_unlock;
 	match_pri = rc;
 
-	hash = efx_ef10_filter_hash(spec);
+	hash = efx_filter_spec_hash(spec);
 	is_mc_recip = efx_filter_is_mc_recipient(spec);
 	if (is_mc_recip)
 		bitmap_zero(mc_rem_map, EFX_EF10_FILTER_SEARCH_LIMIT);
@@ -4380,7 +4355,7 @@ static s32 efx_ef10_filter_insert(struct efx_nic *efx,
 		if (!saved_spec) {
 			if (ins_index < 0)
 				ins_index = i;
-		} else if (efx_ef10_filter_equal(spec, saved_spec)) {
+		} else if (efx_filter_spec_equal(spec, saved_spec)) {
 			if (spec->priority < saved_spec->priority &&
 			    spec->priority != EFX_FILTER_PRI_AUTO) {
 				rc = -EPERM;
@@ -4523,8 +4498,20 @@ out_unlock:
 	if (rss_locked)
 		mutex_unlock(&efx->rss_lock);
 	up_write(&table->lock);
-	up_read(&efx->filter_sem);
 	return rc;
+}
+
+static s32 efx_ef10_filter_insert(struct efx_nic *efx,
+				  struct efx_filter_spec *spec,
+				  bool replace_equal)
+{
+	s32 ret;
+
+	down_read(&efx->filter_sem);
+	ret = efx_ef10_filter_insert_locked(efx, spec, replace_equal);
+	up_read(&efx->filter_sem);
+
+	return ret;
 }
 
 static void efx_ef10_filter_update_rx_scatter(struct efx_nic *efx)
@@ -4764,28 +4751,63 @@ static s32 efx_ef10_filter_get_rx_ids(struct efx_nic *efx,
 static bool efx_ef10_filter_rfs_expire_one(struct efx_nic *efx, u32 flow_id,
 					   unsigned int filter_idx)
 {
+	struct efx_filter_spec *spec, saved_spec;
 	struct efx_ef10_filter_table *table;
-	struct efx_filter_spec *spec;
-	bool ret;
+	struct efx_arfs_rule *rule = NULL;
+	bool ret = true, force = false;
+	u16 arfs_id;
 
 	down_read(&efx->filter_sem);
 	table = efx->filter_state;
 	down_write(&table->lock);
 	spec = efx_ef10_filter_entry_spec(table, filter_idx);
 
-	if (!spec || spec->priority != EFX_FILTER_PRI_HINT) {
-		ret = true;
+	if (!spec || spec->priority != EFX_FILTER_PRI_HINT)
 		goto out_unlock;
-	}
 
-	if (!rps_may_expire_flow(efx->net_dev, spec->dmaq_id,
-				 flow_id, filter_idx)) {
+	spin_lock_bh(&efx->rps_hash_lock);
+	if (!efx->rps_hash_table) {
+		/* In the absence of the table, we always return 0 to ARFS. */
+		arfs_id = 0;
+	} else {
+		rule = efx_rps_hash_find(efx, spec);
+		if (!rule)
+			/* ARFS table doesn't know of this filter, so remove it */
+			goto expire;
+		arfs_id = rule->arfs_id;
+		ret = efx_rps_check_rule(rule, filter_idx, &force);
+		if (force)
+			goto expire;
+		if (!ret) {
+			spin_unlock_bh(&efx->rps_hash_lock);
+			goto out_unlock;
+		}
+	}
+	if (!rps_may_expire_flow(efx->net_dev, spec->dmaq_id, flow_id, arfs_id))
 		ret = false;
-		goto out_unlock;
+	else if (rule)
+		rule->filter_id = EFX_ARFS_FILTER_ID_REMOVING;
+expire:
+	saved_spec = *spec; /* remove operation will kfree spec */
+	spin_unlock_bh(&efx->rps_hash_lock);
+	/* At this point (since we dropped the lock), another thread might queue
+	 * up a fresh insertion request (but the actual insertion will be held
+	 * up by our possession of the filter table lock).  In that case, it
+	 * will set rule->filter_id to EFX_ARFS_FILTER_ID_PENDING, meaning that
+	 * the rule is not removed by efx_rps_hash_del() below.
+	 */
+	if (ret)
+		ret = efx_ef10_filter_remove_internal(efx, 1U << spec->priority,
+						      filter_idx, true) == 0;
+	/* While we can't safely dereference rule (we dropped the lock), we can
+	 * still test it for NULL.
+	 */
+	if (ret && rule) {
+		/* Expiring, so remove entry from ARFS table */
+		spin_lock_bh(&efx->rps_hash_lock);
+		efx_rps_hash_del(efx, &saved_spec);
+		spin_unlock_bh(&efx->rps_hash_lock);
 	}
-
-	ret = efx_ef10_filter_remove_internal(efx, 1U << spec->priority,
-					      filter_idx, true) == 0;
 out_unlock:
 	up_write(&table->lock);
 	up_read(&efx->filter_sem);
@@ -4974,7 +4996,8 @@ static int efx_ef10_filter_table_probe(struct efx_nic *efx)
 		net_dev->hw_features &= ~NETIF_F_HW_VLAN_CTAG_FILTER;
 	}
 
-	table->entry = vzalloc(HUNT_FILTER_TBL_ROWS * sizeof(*table->entry));
+	table->entry = vzalloc(array_size(HUNT_FILTER_TBL_ROWS,
+					  sizeof(*table->entry)));
 	if (!table->entry) {
 		rc = -ENOMEM;
 		goto fail;
@@ -5267,14 +5290,14 @@ static int efx_ef10_filter_insert_addr_list(struct efx_nic *efx,
 		ids = vlan->uc;
 	}
 
-	filter_flags = efx_rss_enabled(efx) ? EFX_FILTER_FLAG_RX_RSS : 0;
+	filter_flags = efx_rss_active(&efx->rss_context) ? EFX_FILTER_FLAG_RX_RSS : 0;
 
 	/* Insert/renew filters */
 	for (i = 0; i < addr_count; i++) {
 		EFX_WARN_ON_PARANOID(ids[i] != EFX_EF10_FILTER_ID_INVALID);
 		efx_filter_init_rx(&spec, EFX_FILTER_PRI_AUTO, filter_flags, 0);
 		efx_filter_set_eth_local(&spec, vlan->vid, addr_list[i].addr);
-		rc = efx_ef10_filter_insert(efx, &spec, true);
+		rc = efx_ef10_filter_insert_locked(efx, &spec, true);
 		if (rc < 0) {
 			if (rollback) {
 				netif_info(efx, drv, efx->net_dev,
@@ -5303,7 +5326,7 @@ static int efx_ef10_filter_insert_addr_list(struct efx_nic *efx,
 		efx_filter_init_rx(&spec, EFX_FILTER_PRI_AUTO, filter_flags, 0);
 		eth_broadcast_addr(baddr);
 		efx_filter_set_eth_local(&spec, vlan->vid, baddr);
-		rc = efx_ef10_filter_insert(efx, &spec, true);
+		rc = efx_ef10_filter_insert_locked(efx, &spec, true);
 		if (rc < 0) {
 			netif_warn(efx, drv, efx->net_dev,
 				   "Broadcast filter insert failed rc=%d\n", rc);
@@ -5336,7 +5359,7 @@ static int efx_ef10_filter_insert_def(struct efx_nic *efx,
 	int rc;
 	u16 *id;
 
-	filter_flags = efx_rss_enabled(efx) ? EFX_FILTER_FLAG_RX_RSS : 0;
+	filter_flags = efx_rss_active(&efx->rss_context) ? EFX_FILTER_FLAG_RX_RSS : 0;
 
 	efx_filter_init_rx(&spec, EFX_FILTER_PRI_AUTO, filter_flags, 0);
 
@@ -5359,7 +5382,7 @@ static int efx_ef10_filter_insert_def(struct efx_nic *efx,
 	if (vlan->vid != EFX_FILTER_VID_UNSPEC)
 		efx_filter_set_eth_local(&spec, vlan->vid, NULL);
 
-	rc = efx_ef10_filter_insert(efx, &spec, true);
+	rc = efx_ef10_filter_insert_locked(efx, &spec, true);
 	if (rc < 0) {
 		const char *um = multicast ? "Multicast" : "Unicast";
 		const char *encap_name = "";
@@ -5419,7 +5442,7 @@ static int efx_ef10_filter_insert_def(struct efx_nic *efx,
 					   filter_flags, 0);
 			eth_broadcast_addr(baddr);
 			efx_filter_set_eth_local(&spec, vlan->vid, baddr);
-			rc = efx_ef10_filter_insert(efx, &spec, true);
+			rc = efx_ef10_filter_insert_locked(efx, &spec, true);
 			if (rc < 0) {
 				netif_warn(efx, drv, efx->net_dev,
 					   "Broadcast filter insert failed rc=%d\n",
@@ -6018,23 +6041,33 @@ static const struct efx_ef10_nvram_type_info efx_ef10_nvram_types[] = {
 	{ NVRAM_PARTITION_TYPE_EXPROM_CONFIG_PORT3, 0,   3, "sfc_exp_rom_cfg" },
 	{ NVRAM_PARTITION_TYPE_LICENSE,		   0,    0, "sfc_license" },
 	{ NVRAM_PARTITION_TYPE_PHY_MIN,		   0xff, 0, "sfc_phy_fw" },
+	{ NVRAM_PARTITION_TYPE_MUM_FIRMWARE,	   0,    0, "sfc_mumfw" },
+	{ NVRAM_PARTITION_TYPE_EXPANSION_UEFI,	   0,    0, "sfc_uefi" },
+	{ NVRAM_PARTITION_TYPE_DYNCONFIG_DEFAULTS, 0,    0, "sfc_dynamic_cfg_dflt" },
+	{ NVRAM_PARTITION_TYPE_ROMCONFIG_DEFAULTS, 0,    0, "sfc_exp_rom_cfg_dflt" },
+	{ NVRAM_PARTITION_TYPE_STATUS,		   0,    0, "sfc_status" },
+	{ NVRAM_PARTITION_TYPE_BUNDLE,		   0,    0, "sfc_bundle" },
+	{ NVRAM_PARTITION_TYPE_BUNDLE_METADATA,	   0,    0, "sfc_bundle_metadata" },
 };
+#define EF10_NVRAM_PARTITION_COUNT	ARRAY_SIZE(efx_ef10_nvram_types)
 
 static int efx_ef10_mtd_probe_partition(struct efx_nic *efx,
 					struct efx_mcdi_mtd_partition *part,
-					unsigned int type)
+					unsigned int type,
+					unsigned long *found)
 {
 	MCDI_DECLARE_BUF(inbuf, MC_CMD_NVRAM_METADATA_IN_LEN);
 	MCDI_DECLARE_BUF(outbuf, MC_CMD_NVRAM_METADATA_OUT_LENMAX);
 	const struct efx_ef10_nvram_type_info *info;
 	size_t size, erase_size, outlen;
+	int type_idx = 0;
 	bool protected;
 	int rc;
 
-	for (info = efx_ef10_nvram_types; ; info++) {
-		if (info ==
-		    efx_ef10_nvram_types + ARRAY_SIZE(efx_ef10_nvram_types))
+	for (type_idx = 0; ; type_idx++) {
+		if (type_idx == EF10_NVRAM_PARTITION_COUNT)
 			return -ENODEV;
+		info = efx_ef10_nvram_types + type_idx;
 		if ((type & ~info->type_mask) == info->type)
 			break;
 	}
@@ -6044,8 +6077,22 @@ static int efx_ef10_mtd_probe_partition(struct efx_nic *efx,
 	rc = efx_mcdi_nvram_info(efx, type, &size, &erase_size, &protected);
 	if (rc)
 		return rc;
+	if (protected &&
+	    (type != NVRAM_PARTITION_TYPE_DYNCONFIG_DEFAULTS &&
+	     type != NVRAM_PARTITION_TYPE_ROMCONFIG_DEFAULTS))
+		/* Hide protected partitions that don't provide defaults. */
+		return -ENODEV;
+
 	if (protected)
-		return -ENODEV; /* hide it */
+		/* Protected partitions are read only. */
+		erase_size = 0;
+
+	/* If we've already exposed a partition of this type, hide this
+	 * duplicate.  All operations on MTDs are keyed by the type anyway,
+	 * so we can't act on the duplicate.
+	 */
+	if (__test_and_set_bit(type_idx, found))
+		return -EEXIST;
 
 	part->nvram_type = type;
 
@@ -6068,6 +6115,9 @@ static int efx_ef10_mtd_probe_partition(struct efx_nic *efx,
 	part->common.mtd.flags = MTD_CAP_NORFLASH;
 	part->common.mtd.size = size;
 	part->common.mtd.erasesize = erase_size;
+	/* sfc_status is read-only */
+	if (!erase_size)
+		part->common.mtd.flags |= MTD_NO_ERASE;
 
 	return 0;
 }
@@ -6075,6 +6125,7 @@ static int efx_ef10_mtd_probe_partition(struct efx_nic *efx,
 static int efx_ef10_mtd_probe(struct efx_nic *efx)
 {
 	MCDI_DECLARE_BUF(outbuf, MC_CMD_NVRAM_PARTITIONS_OUT_LENMAX);
+	DECLARE_BITMAP(found, EF10_NVRAM_PARTITION_COUNT) = { 0 };
 	struct efx_mcdi_mtd_partition *parts;
 	size_t outlen, n_parts_total, i, n_parts;
 	unsigned int type;
@@ -6103,11 +6154,13 @@ static int efx_ef10_mtd_probe(struct efx_nic *efx)
 	for (i = 0; i < n_parts_total; i++) {
 		type = MCDI_ARRAY_DWORD(outbuf, NVRAM_PARTITIONS_OUT_TYPE_ID,
 					i);
-		rc = efx_ef10_mtd_probe_partition(efx, &parts[n_parts], type);
-		if (rc == 0)
-			n_parts++;
-		else if (rc != -ENODEV)
+		rc = efx_ef10_mtd_probe_partition(efx, &parts[n_parts], type,
+						  found);
+		if (rc == -EEXIST || rc == -ENODEV)
+			continue;
+		if (rc)
 			goto fail;
+		n_parts++;
 	}
 
 	rc = efx_mtd_add(efx, &parts[0].common, n_parts, sizeof(*parts));

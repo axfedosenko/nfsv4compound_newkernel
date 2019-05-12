@@ -290,9 +290,6 @@ EXPORT_SYMBOL_GPL(cpufreq_freq_attr_scaling_boost_freqs);
 
 struct freq_attr *cpufreq_generic_attr[] = {
 	&cpufreq_freq_attr_scaling_available_freqs,
-#ifdef CONFIG_CPU_FREQ_BOOST_SW
-	&cpufreq_freq_attr_scaling_boost_freqs,
-#endif
 	NULL,
 };
 EXPORT_SYMBOL_GPL(cpufreq_generic_attr);
@@ -351,20 +348,6 @@ static int set_freq_table_sorted(struct cpufreq_policy *policy)
 
 	return 0;
 }
-
-int cpufreq_table_validate_and_show(struct cpufreq_policy *policy,
-				      struct cpufreq_frequency_table *table)
-{
-	int ret;
-
-	ret = cpufreq_frequency_table_cpuinfo(policy, table);
-	if (ret)
-		return ret;
-
-	policy->freq_table = table;
-	return 0;
-}
-EXPORT_SYMBOL_GPL(cpufreq_table_validate_and_show);
 
 int cpufreq_table_validate_and_sort(struct cpufreq_policy *policy)
 {

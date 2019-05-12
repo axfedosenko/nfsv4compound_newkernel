@@ -126,6 +126,7 @@ int acpi_device_get_power(struct acpi_device *device, int *state)
 
 	return 0;
 }
+EXPORT_SYMBOL(acpi_device_get_power);
 
 static int acpi_dev_pm_explicit_set(struct acpi_device *adev, int state)
 {
@@ -413,7 +414,7 @@ static void acpi_pm_notify_handler(acpi_handle handle, u32 val, void *not_used)
 	if (adev->wakeup.flags.notifier_present) {
 		pm_wakeup_ws_event(adev->wakeup.ws, 0, acpi_s2idle_wakeup());
 		if (adev->wakeup.context.func) {
-			acpi_handle_debug(handle, "Running %pF for %s\n",
+			acpi_handle_debug(handle, "Running %pS for %s\n",
 					  adev->wakeup.context.func,
 					  dev_name(adev->wakeup.context.dev));
 			adev->wakeup.context.func(&adev->wakeup.context);
@@ -726,6 +727,9 @@ static int __acpi_device_wakeup_enable(struct acpi_device *adev,
 		error = -EIO;
 		goto out;
 	}
+
+	acpi_handle_debug(adev->handle, "GPE%2X enabled for wakeup\n",
+			  (unsigned int)wakeup->gpe_number);
 
 inc:
 	wakeup->enable_count++;
@@ -1257,10 +1261,7 @@ int acpi_dev_pm_attach(struct device *dev, bool power_on)
 	struct acpi_device *adev = ACPI_COMPANION(dev);
 
 	if (!adev)
-		return -ENODEV;
-
-	if (dev->pm_domain)
-		return -EEXIST;
+		return 0;
 
 	/*
 	 * Only attach the power domain to the first device if the
@@ -1268,7 +1269,7 @@ int acpi_dev_pm_attach(struct device *dev, bool power_on)
 	 * management twice.
 	 */
 	if (!acpi_device_is_first_physical_node(adev, dev))
-		return -EBUSY;
+		return 0;
 
 	acpi_add_pm_notifier(adev, dev, acpi_pm_notify_work_func);
 	dev_pm_domain_set(dev, &acpi_general_pm_domain);
@@ -1278,7 +1279,7 @@ int acpi_dev_pm_attach(struct device *dev, bool power_on)
 	}
 
 	dev->pm_domain->detach = acpi_dev_pm_detach;
-	return 0;
+	return 1;
 }
 EXPORT_SYMBOL_GPL(acpi_dev_pm_attach);
 #endif /* CONFIG_PM */

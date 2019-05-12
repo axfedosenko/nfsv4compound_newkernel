@@ -1117,7 +1117,7 @@ static inline void mmc_davinci_cpufreq_deregister(struct mmc_davinci_host *host)
 {
 }
 #endif
-static void __init init_mmcsd_host(struct mmc_davinci_host *host)
+static void init_mmcsd_host(struct mmc_davinci_host *host)
 {
 
 	mmc_davinci_reset_ctrl(host, 1);
@@ -1193,7 +1193,7 @@ static int mmc_davinci_parse_pdata(struct mmc_host *mmc)
 	else if (ret)
 		mmc->caps |= MMC_CAP_NEEDS_POLL;
 
-	ret = mmc_gpiod_request_ro(mmc, "wp", 0, false, 0, NULL);
+	ret = mmc_gpiod_request_ro(mmc, "wp", 0, 0, NULL);
 	if (ret == -EPROBE_DEFER)
 		return ret;
 
@@ -1377,8 +1377,7 @@ static int __exit davinci_mmcsd_remove(struct platform_device *pdev)
 #ifdef CONFIG_PM
 static int davinci_mmcsd_suspend(struct device *dev)
 {
-	struct platform_device *pdev = to_platform_device(dev);
-	struct mmc_davinci_host *host = platform_get_drvdata(pdev);
+	struct mmc_davinci_host *host = dev_get_drvdata(dev);
 
 	writel(0, host->base + DAVINCI_MMCIM);
 	mmc_davinci_reset_ctrl(host, 1);
@@ -1389,8 +1388,7 @@ static int davinci_mmcsd_suspend(struct device *dev)
 
 static int davinci_mmcsd_resume(struct device *dev)
 {
-	struct platform_device *pdev = to_platform_device(dev);
-	struct mmc_davinci_host *host = platform_get_drvdata(pdev);
+	struct mmc_davinci_host *host = dev_get_drvdata(dev);
 
 	clk_enable(host->clk);
 	mmc_davinci_reset_ctrl(host, 0);

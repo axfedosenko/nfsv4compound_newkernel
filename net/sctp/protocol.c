@@ -46,7 +46,7 @@
 #include <linux/netdevice.h>
 #include <linux/inetdevice.h>
 #include <linux/seq_file.h>
-#include <linux/bootmem.h>
+#include <linux/memblock.h>
 #include <linux/highmem.h>
 #include <linux/swap.h>
 #include <linux/slab.h>
@@ -101,7 +101,6 @@ static void sctp_v4_copy_addrlist(struct list_head *addrlist,
 		addr = kzalloc(sizeof(*addr), GFP_ATOMIC);
 		if (addr) {
 			addr->a.v4.sin_family = AF_INET;
-			addr->a.v4.sin_port = 0;
 			addr->a.v4.sin_addr.s_addr = ifa->ifa_local;
 			addr->valid = 1;
 			INIT_LIST_HEAD(&addr->list);
@@ -185,6 +184,45 @@ int sctp_copy_local_addr_list(struct net *net, struct sctp_bind_addr *bp,
 
 	rcu_read_unlock();
 	return error;
+}
+
+/* Copy over any ip options */
+static void sctp_v4_copy_ip_options(struct sock *sk, struct sock *newsk)
+{
+	struct inet_sock *newinet, *inet = inet_sk(sk);
+	struct ip_options_rcu *inet_opt, *newopt = NULL;
+
+	newinet = inet_sk(newsk);
+
+	rcu_read_lock();
+	inet_opt = rcu_dereference(inet->inet_opt);
+	if (inet_opt) {
+		newopt = sock_kmalloc(newsk, sizeof(*inet_opt) +
+				      inet_opt->opt.optlen, GFP_ATOMIC);
+		if (newopt)
+			memcpy(newopt, inet_opt, sizeof(*inet_opt) +
+			       inet_opt->opt.optlen);
+		else
+			pr_err("%s: Failed to copy ip options\n", __func__);
+	}
+	RCU_INIT_POINTER(newinet->inet_opt, newopt);
+	rcu_read_unlock();
+}
+
+/* Account for the IP options */
+static int sctp_v4_ip_options_len(struct sock *sk)
+{
+	struct inet_sock *inet = inet_sk(sk);
+	struct ip_options_rcu *inet_opt;
+	int len = 0;
+
+	rcu_read_lock();
+	inet_opt = rcu_dereference(inet->inet_opt);
+	if (inet_opt)
+		len = inet_opt->opt.optlen;
+
+	rcu_read_unlock();
+	return len;
 }
 
 /* Initialize a sctp_addr from in incoming skb.  */
@@ -387,19 +425,23 @@ static void sctp_v4_get_dst(struct sctp_transport *t, union sctp_addr *saddr,
 	struct dst_entry *dst = NULL;
 	union sctp_addr *daddr = &t->ipaddr;
 	union sctp_addr dst_saddr;
+	__u8 tos = inet_sk(sk)->tos;
 
+	if (t->dscp & SCTP_DSCP_SET_MASK)
+		tos = t->dscp & SCTP_DSCP_VAL_MASK;
 	memset(fl4, 0x0, sizeof(struct flowi4));
 	fl4->daddr  = daddr->v4.sin_addr.s_addr;
 	fl4->fl4_dport = daddr->v4.sin_port;
 	fl4->flowi4_proto = IPPROTO_SCTP;
 	if (asoc) {
-		fl4->flowi4_tos = RT_CONN_FLAGS(asoc->base.sk);
+		fl4->flowi4_tos = RT_CONN_FLAGS_TOS(asoc->base.sk, tos);
 		fl4->flowi4_oif = asoc->base.sk->sk_bound_dev_if;
 		fl4->fl4_sport = htons(asoc->base.bind_addr.port);
 	}
 	if (saddr) {
 		fl4->saddr = saddr->v4.sin_addr.s_addr;
-		fl4->fl4_sport = saddr->v4.sin_port;
+		if (!fl4->fl4_sport)
+			fl4->fl4_sport = saddr->v4.sin_port;
 	}
 
 	pr_debug("%s: dst:%pI4, src:%pI4 - ", __func__, &fl4->daddr,
@@ -456,7 +498,7 @@ static void sctp_v4_get_dst(struct sctp_transport *t, union sctp_addr *saddr,
 		fl4->fl4_sport = laddr->a.v4.sin_port;
 		flowi4_update_output(fl4,
 				     asoc->base.sk->sk_bound_dev_if,
-				     RT_CONN_FLAGS(asoc->base.sk),
+				     RT_CONN_FLAGS_TOS(asoc->base.sk, tos),
 				     daddr->v4.sin_addr.s_addr,
 				     laddr->a.v4.sin_addr.s_addr);
 
@@ -538,6 +580,8 @@ static struct sock *sctp_v4_create_accept_sk(struct sock *sk,
 	sctp_copy_sock(newsk, sk, asoc);
 	sock_reset_flag(newsk, SOCK_ZAPPED);
 
+	sctp_v4_copy_ip_options(sk, newsk);
+
 	newinet = inet_sk(newsk);
 
 	newinet->inet_daddr = asoc->peer.primary_addr.v4.sin_addr.s_addr;
@@ -556,6 +600,7 @@ out:
 static int sctp_v4_addr_to_user(struct sctp_sock *sp, union sctp_addr *addr)
 {
 	/* No address mapping for V4 sockets */
+	memset(addr->v4.sin_zero, 0, sizeof(addr->v4.sin_zero));
 	return sizeof(struct sockaddr_in);
 }
 
@@ -732,10 +777,9 @@ static int sctp_inetaddr_event(struct notifier_block *this, unsigned long ev,
 
 	switch (ev) {
 	case NETDEV_UP:
-		addr = kmalloc(sizeof(struct sctp_sockaddr_entry), GFP_ATOMIC);
+		addr = kzalloc(sizeof(*addr), GFP_ATOMIC);
 		if (addr) {
 			addr->a.v4.sin_family = AF_INET;
-			addr->a.v4.sin_port = 0;
 			addr->a.v4.sin_addr.s_addr = ifa->ifa_local;
 			addr->valid = 1;
 			spin_lock_bh(&net->sctp.local_addr_lock);
@@ -930,16 +974,21 @@ static inline int sctp_v4_xmit(struct sk_buff *skb,
 			       struct sctp_transport *transport)
 {
 	struct inet_sock *inet = inet_sk(skb->sk);
+	__u8 dscp = inet->tos;
 
 	pr_debug("%s: skb:%p, len:%d, src:%pI4, dst:%pI4\n", __func__, skb,
-		 skb->len, &transport->fl.u.ip4.saddr, &transport->fl.u.ip4.daddr);
+		 skb->len, &transport->fl.u.ip4.saddr,
+		 &transport->fl.u.ip4.daddr);
+
+	if (transport->dscp & SCTP_DSCP_SET_MASK)
+		dscp = transport->dscp & SCTP_DSCP_VAL_MASK;
 
 	inet->pmtudisc = transport->param_flags & SPP_PMTUD_ENABLE ?
 			 IP_PMTUDISC_DO : IP_PMTUDISC_DONT;
 
 	SCTP_INC_STATS(sock_net(&inet->sk), SCTP_MIB_OUTSCTPPACKS);
 
-	return ip_queue_xmit(&inet->sk, skb, &transport->fl);
+	return __ip_queue_xmit(&inet->sk, skb, &transport->fl, dscp);
 }
 
 static struct sctp_af sctp_af_inet;
@@ -956,6 +1005,7 @@ static struct sctp_pf sctp_pf_inet = {
 	.addr_to_user  = sctp_v4_addr_to_user,
 	.to_sk_saddr   = sctp_v4_to_sk_saddr,
 	.to_sk_daddr   = sctp_v4_to_sk_daddr,
+	.copy_ip_options = sctp_v4_copy_ip_options,
 	.af            = &sctp_af_inet
 };
 
@@ -970,12 +1020,13 @@ static const struct proto_ops inet_seqpacket_ops = {
 	.owner		   = THIS_MODULE,
 	.release	   = inet_release,	/* Needs to be wrapped... */
 	.bind		   = inet_bind,
-	.connect	   = inet_dgram_connect,
+	.connect	   = sctp_inet_connect,
 	.socketpair	   = sock_no_socketpair,
 	.accept		   = inet_accept,
 	.getname	   = inet_getname,	/* Semantics are different.  */
 	.poll		   = sctp_poll,
 	.ioctl		   = inet_ioctl,
+	.gettstamp	   = sock_gettstamp,
 	.listen		   = sctp_inet_listen,
 	.shutdown	   = inet_shutdown,	/* Looks harmless.  */
 	.setsockopt	   = sock_common_setsockopt, /* IP_SOL IP_OPTION is a problem */
@@ -1040,6 +1091,7 @@ static struct sctp_af sctp_af_inet = {
 	.ecn_capable	   = sctp_v4_ecn_capable,
 	.net_header_len	   = sizeof(struct iphdr),
 	.sockaddr_len	   = sizeof(struct sockaddr_in),
+	.ip_options_len	   = sctp_v4_ip_options_len,
 #ifdef CONFIG_COMPAT
 	.compat_setsockopt = compat_ip_setsockopt,
 	.compat_getsockopt = compat_ip_getsockopt,
@@ -1317,6 +1369,7 @@ static __init int sctp_init(void)
 	int status = -EINVAL;
 	unsigned long goal;
 	unsigned long limit;
+	unsigned long nr_pages = totalram_pages();
 	int max_share;
 	int order;
 	int num_entries;
@@ -1375,10 +1428,10 @@ static __init int sctp_init(void)
 	 * The methodology is similar to that of the tcp hash tables.
 	 * Though not identical.  Start by getting a goal size
 	 */
-	if (totalram_pages >= (128 * 1024))
-		goal = totalram_pages >> (22 - PAGE_SHIFT);
+	if (nr_pages >= (128 * 1024))
+		goal = nr_pages >> (22 - PAGE_SHIFT);
 	else
-		goal = totalram_pages >> (24 - PAGE_SHIFT);
+		goal = nr_pages >> (24 - PAGE_SHIFT);
 
 	/* Then compute the page order for said goal */
 	order = get_order(goal);
@@ -1395,7 +1448,7 @@ static __init int sctp_init(void)
 	/* Allocate and initialize the endpoint hash table.  */
 	sctp_ep_hashsize = 64;
 	sctp_ep_hashtable =
-		kmalloc(64 * sizeof(struct sctp_hashbucket), GFP_KERNEL);
+		kmalloc_array(64, sizeof(struct sctp_hashbucket), GFP_KERNEL);
 	if (!sctp_ep_hashtable) {
 		pr_err("Failed endpoint_hash alloc\n");
 		status = -ENOMEM;

@@ -363,7 +363,7 @@ static void reg_w_ixbuf(struct gspca_dev *gspca_dev,
 	if (len * 2 <= USB_BUF_SZ) {
 		p = tmpbuf = gspca_dev->usb_buf;
 	} else {
-		p = tmpbuf = kmalloc(len * 2, GFP_KERNEL);
+		p = tmpbuf = kmalloc_array(len, 2, GFP_KERNEL);
 		if (!tmpbuf) {
 			pr_err("Out of memory\n");
 			return;
@@ -966,7 +966,7 @@ static int sd_init_controls(struct gspca_dev *gspca_dev)
 			V4L2_CID_SATURATION, 0, 0xf, 1, 5);
 	v4l2_ctrl_new_std(hdl, &sd_ctrl_ops,
 			V4L2_CID_GAMMA, 0, GAMMA_MAX, 1, 10);
-	/* Activate lowlight, some apps dont bring up the
+	/* Activate lowlight, some apps don't bring up the
 	   backlight_compensation control) */
 	v4l2_ctrl_new_std(hdl, &sd_ctrl_ops,
 			V4L2_CID_BACKLIGHT_COMPENSATION, 0, 1, 1, 1);

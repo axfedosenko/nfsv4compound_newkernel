@@ -474,8 +474,8 @@ static int longhaul_get_ranges(void)
 		return -EINVAL;
 	}
 
-	longhaul_table = kzalloc((numscales + 1) * sizeof(*longhaul_table),
-			GFP_KERNEL);
+	longhaul_table = kcalloc(numscales + 1, sizeof(*longhaul_table),
+				 GFP_KERNEL);
 	if (!longhaul_table)
 		return -ENOMEM;
 
@@ -851,7 +851,7 @@ static int longhaul_cpu_init(struct cpufreq_policy *policy)
 	case TYPE_POWERSAVER:
 		pr_cont("Powersaver supported\n");
 		break;
-	};
+	}
 
 	/* Doesn't hurt */
 	longhaul_setup_southbridge();

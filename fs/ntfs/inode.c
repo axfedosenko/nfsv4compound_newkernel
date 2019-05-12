@@ -332,21 +332,9 @@ struct inode *ntfs_alloc_big_inode(struct super_block *sb)
 	return NULL;
 }
 
-static void ntfs_i_callback(struct rcu_head *head)
+void ntfs_free_big_inode(struct inode *inode)
 {
-	struct inode *inode = container_of(head, struct inode, i_rcu);
 	kmem_cache_free(ntfs_big_inode_cache, NTFS_I(inode));
-}
-
-void ntfs_destroy_big_inode(struct inode *inode)
-{
-	ntfs_inode *ni = NTFS_I(inode);
-
-	ntfs_debug("Entering.");
-	BUG_ON(ni->page);
-	if (!atomic_dec_and_test(&ni->count))
-		BUG();
-	call_rcu(&inode->i_rcu, ntfs_i_callback);
 }
 
 static inline ntfs_inode *ntfs_alloc_extent_inode(void)
@@ -2287,6 +2275,9 @@ void ntfs_evict_big_inode(struct inode *vi)
 			ni->ext.base_ntfs_ino = NULL;
 		}
 	}
+	BUG_ON(ni->page);
+	if (!atomic_dec_and_test(&ni->count))
+		BUG();
 	return;
 }
 
@@ -2804,11 +2795,11 @@ done:
 	 * for real.
 	 */
 	if (!IS_NOCMTIME(VFS_I(base_ni)) && !IS_RDONLY(VFS_I(base_ni))) {
-		struct timespec now = current_time(VFS_I(base_ni));
+		struct timespec64 now = current_time(VFS_I(base_ni));
 		int sync_it = 0;
 
-		if (!timespec_equal(&VFS_I(base_ni)->i_mtime, &now) ||
-		    !timespec_equal(&VFS_I(base_ni)->i_ctime, &now))
+		if (!timespec64_equal(&VFS_I(base_ni)->i_mtime, &now) ||
+		    !timespec64_equal(&VFS_I(base_ni)->i_ctime, &now))
 			sync_it = 1;
 		VFS_I(base_ni)->i_mtime = now;
 		VFS_I(base_ni)->i_ctime = now;
@@ -2923,14 +2914,14 @@ int ntfs_setattr(struct dentry *dentry, struct iattr *attr)
 		}
 	}
 	if (ia_valid & ATTR_ATIME)
-		vi->i_atime = timespec_trunc(attr->ia_atime,
-				vi->i_sb->s_time_gran);
+		vi->i_atime = timespec64_trunc(attr->ia_atime,
+					       vi->i_sb->s_time_gran);
 	if (ia_valid & ATTR_MTIME)
-		vi->i_mtime = timespec_trunc(attr->ia_mtime,
-				vi->i_sb->s_time_gran);
+		vi->i_mtime = timespec64_trunc(attr->ia_mtime,
+					       vi->i_sb->s_time_gran);
 	if (ia_valid & ATTR_CTIME)
-		vi->i_ctime = timespec_trunc(attr->ia_ctime,
-				vi->i_sb->s_time_gran);
+		vi->i_ctime = timespec64_trunc(attr->ia_ctime,
+					       vi->i_sb->s_time_gran);
 	mark_inode_dirty(vi);
 out:
 	return err;

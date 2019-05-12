@@ -652,7 +652,7 @@ static void bcmgenet_set_ring_rx_coalesce(struct bcmgenet_rx_ring *ring,
 	pkts = ring->rx_max_coalesced_frames;
 
 	if (ec->use_adaptive_rx_coalesce && !ring->dim.use_dim) {
-		moder = net_dim_get_def_profile(ring->dim.dim.mode);
+		moder = net_dim_get_def_rx_moderation(ring->dim.dim.mode);
 		usecs = moder.usec;
 		pkts = moder.pkts;
 	}
@@ -1169,7 +1169,7 @@ static int bcmgenet_power_down(struct bcmgenet_priv *priv,
 		break;
 	}
 
-	return 0;
+	return ret;
 }
 
 static void bcmgenet_power_up(struct bcmgenet_priv *priv,
@@ -1489,7 +1489,7 @@ static struct sk_buff *bcmgenet_put_tx_csum(struct net_device *dev,
 	struct sk_buff *new_skb;
 	u16 offset;
 	u8 ip_proto;
-	u16 ip_ver;
+	__be16 ip_ver;
 	u32 tx_csum_info;
 
 	if (unlikely(skb_headroom(skb) < sizeof(*status))) {
@@ -1509,12 +1509,12 @@ static struct sk_buff *bcmgenet_put_tx_csum(struct net_device *dev,
 	status = (struct status_64 *)skb->data;
 
 	if (skb->ip_summed  == CHECKSUM_PARTIAL) {
-		ip_ver = htons(skb->protocol);
+		ip_ver = skb->protocol;
 		switch (ip_ver) {
-		case ETH_P_IP:
+		case htons(ETH_P_IP):
 			ip_proto = ip_hdr(skb)->protocol;
 			break;
-		case ETH_P_IPV6:
+		case htons(ETH_P_IPV6):
 			ip_proto = ipv6_hdr(skb)->nexthdr;
 			break;
 		default:
@@ -1530,7 +1530,8 @@ static struct sk_buff *bcmgenet_put_tx_csum(struct net_device *dev,
 		 */
 		if (ip_proto == IPPROTO_TCP || ip_proto == IPPROTO_UDP) {
 			tx_csum_info |= STATUS_TX_CSUM_LV;
-			if (ip_proto == IPPROTO_UDP && ip_ver == ETH_P_IP)
+			if (ip_proto == IPPROTO_UDP &&
+			    ip_ver == htons(ETH_P_IP))
 				tx_csum_info |= STATUS_TX_CSUM_PROTO_UDP;
 		} else {
 			tx_csum_info = 0;
@@ -1664,7 +1665,7 @@ static netdev_tx_t bcmgenet_xmit(struct sk_buff *skb, struct net_device *dev)
 	if (ring->free_bds <= (MAX_SKB_FRAGS + 1))
 		netif_tx_stop_queue(txq);
 
-	if (!skb->xmit_more || netif_xmit_stopped(txq))
+	if (!netdev_xmit_more() || netif_xmit_stopped(txq))
 		/* Packets are ready, update producer index */
 		bcmgenet_tdma_ring_writel(priv, ring->index,
 					  ring->prod_index, TDMA_PROD_INDEX);
@@ -1924,7 +1925,7 @@ static void bcmgenet_dim_work(struct work_struct *work)
 	struct bcmgenet_rx_ring *ring =
 			container_of(ndim, struct bcmgenet_rx_ring, dim);
 	struct net_dim_cq_moder cur_profile =
-			net_dim_get_profile(dim->mode, dim->profile_ix);
+			net_dim_get_rx_moderation(dim->mode, dim->profile_ix);
 
 	bcmgenet_set_rx_coalesce(ring, cur_profile.usec, cur_profile.pkts);
 	dim->state = NET_DIM_START_MEASURE;
@@ -2101,7 +2102,7 @@ static void bcmgenet_init_rx_coalesce(struct bcmgenet_rx_ring *ring)
 
 	/* If DIM was enabled, re-apply default parameters */
 	if (dim->use_dim) {
-		moder = net_dim_get_def_profile(dim->dim.mode);
+		moder = net_dim_get_def_rx_moderation(dim->dim.mode);
 		usecs = moder.usec;
 		pkts = moder.pkts;
 	}
@@ -2854,7 +2855,6 @@ static void bcmgenet_netif_start(struct net_device *dev)
 
 	umac_enable_set(priv, CMD_TX_EN | CMD_RX_EN, true);
 
-	netif_tx_start_all_queues(dev);
 	bcmgenet_enable_tx_napi(priv);
 
 	/* Monitor link interrupts now */
@@ -2936,6 +2936,8 @@ static int bcmgenet_open(struct net_device *dev)
 
 	bcmgenet_netif_start(dev);
 
+	netif_tx_start_all_queues(dev);
+
 	return 0;
 
 err_irq1:
@@ -2957,7 +2959,7 @@ static void bcmgenet_netif_stop(struct net_device *dev)
 	struct bcmgenet_priv *priv = netdev_priv(dev);
 
 	bcmgenet_disable_tx_napi(priv);
-	netif_tx_stop_all_queues(dev);
+	netif_tx_disable(dev);
 
 	/* Disable MAC receive */
 	umac_enable_set(priv, CMD_RX_EN, false);
@@ -3474,7 +3476,7 @@ static int bcmgenet_probe(struct platform_device *pdev)
 
 	if (dn) {
 		macaddr = of_get_mac_address(dn);
-		if (!macaddr) {
+		if (IS_ERR(macaddr)) {
 			dev_err(&pdev->dev, "can't find MAC address\n");
 			err = -EINVAL;
 			goto err;
@@ -3610,36 +3612,6 @@ static int bcmgenet_remove(struct platform_device *pdev)
 }
 
 #ifdef CONFIG_PM_SLEEP
-static int bcmgenet_suspend(struct device *d)
-{
-	struct net_device *dev = dev_get_drvdata(d);
-	struct bcmgenet_priv *priv = netdev_priv(dev);
-	int ret = 0;
-
-	if (!netif_running(dev))
-		return 0;
-
-	bcmgenet_netif_stop(dev);
-
-	if (!device_may_wakeup(d))
-		phy_suspend(dev->phydev);
-
-	netif_device_detach(dev);
-
-	/* Prepare the device for Wake-on-LAN and switch to the slow clock */
-	if (device_may_wakeup(d) && priv->wolopts) {
-		ret = bcmgenet_power_down(priv, GENET_POWER_WOL_MAGIC);
-		clk_prepare_enable(priv->clk_wol);
-	} else if (priv->internal_phy) {
-		ret = bcmgenet_power_down(priv, GENET_POWER_PASSIVE);
-	}
-
-	/* Turn off the clocks */
-	clk_disable_unprepare(priv->clk);
-
-	return ret;
-}
-
 static int bcmgenet_resume(struct device *d)
 {
 	struct net_device *dev = dev_get_drvdata(d);
@@ -3699,8 +3671,6 @@ static int bcmgenet_resume(struct device *d)
 	/* Always enable ring 16 - descriptor ring */
 	bcmgenet_enable_dma(priv, dma_ctrl);
 
-	netif_device_attach(dev);
-
 	if (!device_may_wakeup(d))
 		phy_resume(dev->phydev);
 
@@ -3709,12 +3679,47 @@ static int bcmgenet_resume(struct device *d)
 
 	bcmgenet_netif_start(dev);
 
+	netif_device_attach(dev);
+
 	return 0;
 
 out_clk_disable:
 	if (priv->internal_phy)
 		bcmgenet_power_down(priv, GENET_POWER_PASSIVE);
 	clk_disable_unprepare(priv->clk);
+	return ret;
+}
+
+static int bcmgenet_suspend(struct device *d)
+{
+	struct net_device *dev = dev_get_drvdata(d);
+	struct bcmgenet_priv *priv = netdev_priv(dev);
+	int ret = 0;
+
+	if (!netif_running(dev))
+		return 0;
+
+	netif_device_detach(dev);
+
+	bcmgenet_netif_stop(dev);
+
+	if (!device_may_wakeup(d))
+		phy_suspend(dev->phydev);
+
+	/* Prepare the device for Wake-on-LAN and switch to the slow clock */
+	if (device_may_wakeup(d) && priv->wolopts) {
+		ret = bcmgenet_power_down(priv, GENET_POWER_WOL_MAGIC);
+		clk_prepare_enable(priv->clk_wol);
+	} else if (priv->internal_phy) {
+		ret = bcmgenet_power_down(priv, GENET_POWER_PASSIVE);
+	}
+
+	/* Turn off the clocks */
+	clk_disable_unprepare(priv->clk);
+
+	if (ret)
+		bcmgenet_resume(d);
+
 	return ret;
 }
 #endif /* CONFIG_PM_SLEEP */

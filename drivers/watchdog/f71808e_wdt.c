@@ -496,7 +496,7 @@ static bool watchdog_is_running(void)
 
 	is_running = (superio_inb(watchdog.sioaddr, SIO_REG_ENABLE) & BIT(0))
 		&& (superio_inb(watchdog.sioaddr, F71808FG_REG_WDT_CONF)
-			& F71808FG_FLAG_WD_EN);
+			& BIT(F71808FG_FLAG_WD_EN));
 
 	superio_exit(watchdog.sioaddr);
 
@@ -525,7 +525,7 @@ static int watchdog_open(struct inode *inode, struct file *file)
 		__module_get(THIS_MODULE);
 
 	watchdog.expect_close = 0;
-	return nonseekable_open(inode, file);
+	return stream_open(inode, file);
 }
 
 static int watchdog_release(struct inode *inode, struct file *file)
